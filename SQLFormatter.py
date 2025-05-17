@@ -43,15 +43,13 @@ class SQLFormatter:
                 formatted_blocks.append(
                     SQLFormatter.format_alter_table(part + ';')
                 )
-
             elif upper.startswith("UPDATE"):
-                # first do your strict UPDATE formatting
+                # strict UPDATE formatting
                 upd = SQLFormatter.format_update_block(part + ';')
                 # only pretty‐print embedded JSON if the flag is on
                 if pretty_json:
                     upd = SQLFormatter._format_embedded_json(upd)
                 formatted_blocks.append(upd)
-
             else:
                 formatted_blocks.append(part + ';')
 
@@ -68,16 +66,23 @@ class SQLFormatter:
 
         table_name = table_m.group(1)
         cols = [c.strip() for c in cols_m.group(1).split(',')]
-        vals = [v.strip() for v in re.split(r',(?![^()]*\))', vals_m.group(1))]
+        vals = smart_split_csv(vals_m.group(1))
 
         if len(cols) != len(vals):
             return (
-                f"❌ Column/value count mismatch ({len(cols)} vs {len(vals)}).\n\n"
-                f"❌Columns: {cols}\n\n❌Values: {vals}"
+                    "❌ Mismatch Found:\n"
+                    f"    Column/value count mismatch ({len(cols)} vs {len(vals)}).\n\n"
+                    f"    Columns: {cols}\n"
+                    f"    Values:  {vals}\n"
+                    "    " + "^" * 72
             )
 
         indent = "    "
-        val_comma = [vals[i] + ("," if i < len(vals) - 1 else "") for i in range(len(vals))]
+        # build val+comma entries
+        val_comma = [
+            vals[i] + ("," if i < len(vals) - 1 else "")
+            for i in range(len(vals))
+        ]
         max_len = max(len(v) for v in val_comma)
 
         lines = [f"INSERT INTO {table_name} ("]
@@ -86,8 +91,13 @@ class SQLFormatter:
             lines.append(f"{indent}{col}{comma}")
         lines.append(") VALUES (")
 
-        for i, v in enumerate(val_comma):
-            lines.append(f"{indent}{v.ljust(max_len)}  -- {cols[i]}")
+        for v, col in zip(val_comma, cols):
+            # if it ends with comma: pad = max_len-len(v)+1, else +2
+            if v.endswith(','):
+                pad = max_len - len(v) + 1
+            else:
+                pad = max_len - len(v) + 2
+            lines.append(f"{indent}{v}{' ' * pad}-- {col}")
 
         lines.append(");")
         return "\n".join(lines)
@@ -163,46 +173,41 @@ class SQLFormatter:
     def format_update_block(sql: str) -> str:
         lines = sql.splitlines()
         formatted = []
-        in_assign = False
         buffer = []
+        in_assign = False
 
-        # stricter: only lines starting “SET <var> =” or “SET <var> :=”
-        start_pattern = re.compile(r'^SET\s+[@\w]+\s*[:=]', re.IGNORECASE)
-        # splits on commas not inside JSON braces
-        split_commas = lambda text: re.split(r',(?![^{}]*\})', text)
+        start_re = re.compile(r'^SET\s+[@\w]+\s*[:=]', re.IGNORECASE)
+        cont_re = re.compile(r'^@?\w+\s*[:=]')
 
         for line in lines:
             stripped = line.strip()
-            if start_pattern.match(stripped):
-                # begin assignment block
+            if start_re.match(stripped):
                 in_assign = True
-                # drop the “SET ” prefix, keep the rest
-                buffer.append(stripped[len(stripped.split(None, 1)[0]):].strip())
-            elif in_assign and re.match(r'^[@\w]', stripped):
-                # continuation line of assignments
+                # drop leading "SET"
+                rest = stripped[len(stripped.split(None, 1)[0]):].strip()
+                buffer.append(rest)
+            elif in_assign and cont_re.match(stripped):
                 buffer.append(stripped)
             else:
-                # flush any buffered assignments
                 if in_assign:
                     formatted.append("  SET")
                     joint = ' '.join(buffer)
-                    parts = split_commas(joint)
-                    for part in parts:
-                        formatted.append(f"    {part.strip()},")
-                    # remove trailing comma on last assignment
-                    formatted[-1] = formatted[-1].rstrip(',')
+                    parts = re.split(r',(?![^{}]*\})', joint)
+                    for p in parts[:-1]:
+                        formatted.append(f"    {p.strip()},")
+                    # last part without trailing comma
+                    formatted.append(f"    {parts[-1].strip()}")
                     buffer.clear()
                     in_assign = False
                 formatted.append(line)
 
-        # flush at EOF if still in_assign
         if in_assign:
             formatted.append("  SET")
             joint = ' '.join(buffer)
-            parts = split_commas(joint)
-            for part in parts:
-                formatted.append(f"    {part.strip()},")
-            formatted[-1] = formatted[-1].rstrip(',')
+            parts = re.split(r',(?![^{}]*\})', joint)
+            for p in parts[:-1]:
+                formatted.append(f"    {p.strip()},")
+            formatted.append(f"    {parts[-1].strip()}")
 
         return "\n".join(formatted)
 
@@ -219,52 +224,29 @@ class SQLFormatter:
     def format_set_block(sql: str) -> str:
         lines = sql.strip().splitlines()
         parsed = []
-        skip_json = lambda v: v.strip().startswith('{') or v.strip().startswith('[')
 
         set_pattern = re.compile(
-            r"^\s*SET\s+(@?[A-Z0-9_]+)\s*([:=]{1,2})\s*(.+);?$",
+            r"^\s*SET\s+(@?[A-Z0-9_]+)\s*([:=]{1,2})\s*(.+?);?\s*$",
             re.IGNORECASE
         )
-
-        # Only treat as set block if all lines match the `SET var = value` format
-        is_pure_set_block = all(set_pattern.match(line.strip()) for line in lines)
-
-        if not is_pure_set_block:
-            return sql  # Return original if this is not a pure SET block
+        # only pure SET‐lines
+        if not all(set_pattern.match(l) for l in lines):
+            return sql
 
         for line in lines:
-            m = set_pattern.match(line.strip())
-            if m:
-                lhs, op, rhs = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
-                if skip_json(rhs):
-                    return sql  # skip formatting if we hit JSON-ish content
-                parsed.append((lhs, op, rhs))
+            m = set_pattern.match(line)
+            lhs, op, rhs = m.group(1), m.group(2), m.group(3).strip().rstrip(';')
+            # skip JSON‐like values
+            if rhs.startswith('{') or rhs.startswith('['):
+                return sql
+            parsed.append((lhs, op, rhs))
 
-        max_lhs_len = max(len(lhs) for lhs, _, _ in parsed)
-        max_op_len = max(len(op) for _, op, _ in parsed)
+        max_lhs = max(len(lhs) for lhs, _, _ in parsed)
 
-        formatted_lines = [
-            f"SET {lhs.ljust(max_lhs_len)} {op.ljust(max_op_len)} {rhs};"
-            for lhs, op, rhs in parsed
-        ]
-        return "\n".join(formatted_lines)
-
-    @staticmethod
-    def _format_insert_values_block(stmt: str) -> str:
-        table_match = re.search(r"INSERT\s+INTO\s+([^\s(]+)", stmt, re.IGNORECASE)
-        cols_match = re.search(r"\((.*?)\)\s*VALUES", stmt, re.IGNORECASE | re.DOTALL)
-        values_match = re.search(r"VALUES\s*\((.*)\)", stmt, re.IGNORECASE | re.DOTALL)
-
-        if not table_match or not cols_match or not values_match:
-            return stmt + ';'
-
-        cols = [c.strip() for c in cols_match.group(1).split(',')]
-        values = re.split(r',(?![^()]*\))', values_match.group(1))
-        values = [v.strip() for v in values]
-
-        formatted = f"INSERT INTO {table_match.group(1)} (\n    " + ',\n    '.join(
-            cols) + "\n)\nVALUES (\n    " + ',\n    '.join(values) + "\n);"
-        return formatted
+        out = []
+        for lhs, op, rhs in parsed:
+            out.append(f"SET {lhs.ljust(max_lhs)} {op} {rhs};")
+        return "\n".join(out)
 
     @staticmethod
     def _format_insert_select_block(stmt: str) -> str:
@@ -292,20 +274,46 @@ class SQLFormatter:
 
     @staticmethod
     def _format_embedded_json(stmt: str) -> str:
-        def replacer(m):
-            prefix = m.group('prefix')
-            raw = m.group('json')
+        def repl(m):
+            prefix, raw = m.group('prefix'), m.group('json')
             try:
                 obj = json.loads(raw)
                 pretty = json.dumps(obj, indent=4)
                 return f"{prefix}'{pretty}'"
-            except Exception:
+            except:
                 return m.group(0)
 
         pattern = r"""(?P<prefix>\bSET\b.*?=\s*|UPDATE\s+\w+\s+SET\s+\w+\s*=\s*)'(?P<json>\{.*?\})'"""
-        return re.sub(pattern, replacer, stmt, flags=re.IGNORECASE | re.DOTALL)
+        return re.sub(pattern, repl, stmt, flags=re.IGNORECASE | re.DOTALL)
 
     @staticmethod
     def _indent_sql(block: str) -> str:
         lines = block.splitlines()
         return '\n'.join('    ' + line.strip() for line in lines if line.strip())
+
+
+def smart_split_csv(s: str) -> list[str]:
+    parts = []
+    current = []
+    in_quotes = False
+    escape = False
+
+    for char in s:
+        if escape:
+            current.append(char)
+            escape = False
+        elif char == "\\":
+            current.append(char)
+            escape = True
+        elif char == "'":
+            in_quotes = not in_quotes
+            current.append(char)
+        elif char == "," and not in_quotes:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+
+    if current:
+        parts.append("".join(current).strip())
+    return parts

@@ -1,111 +1,145 @@
 import sys
-import re
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout,
-    QPushButton, QLabel, QSizePolicy
-)
+
 from PyQt5.Qsci import QsciScintilla, QsciLexerSQL
-from PyQt5.QtGui import QFont, QColor, QPalette
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont, QColor, QPalette
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QSizePolicy, QSplitter, QCheckBox
+)
+
+import SQLFormatter
 
 
-class InsertFormatter(QWidget):
+class SQLFormatterApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SQL Insert Formatter")
-        self.setMinimumSize(900, 650)
+        self.setWindowTitle("SQL Formatter")
+        self.setMinimumSize(900, 700)
+        self.mono = QFont("Courier New", 14)
+        self.mono.setStyleHint(QFont.Monospace)
+        self.cache_file = "last_input.sql"
+        self._setup_ui()
+        self._load_cached_input()
+        self.installEventFilter(self)
 
-        # Larger monospace font
-        mono = QFont("Courier New", 14)
-        mono.setStyleHint(QFont.Monospace)
-
+    def _setup_ui(self):
         layout = QVBoxLayout()
 
-        # Input label
-        self.input_label = QLabel("Paste raw SQL INSERT statement:")
-        layout.addWidget(self.input_label)
+        layout.addWidget(QLabel("Paste raw SQL INSERT statement:"))
 
-        # Input editor with SQL lexer
-        self.input_text = QsciScintilla()
-        self.input_text.setFont(mono)
-        self.input_text.setUtf8(True)
-        lexer_in = QsciLexerSQL()
-        lexer_in.setDefaultFont(mono)
-        lexer_in.setDefaultPaper(QColor("#f0f0f0"))
-        lexer_in.setDefaultColor(QColor("#000000"))
-        self.input_text.setLexer(lexer_in)
-        pal_in = self.input_text.palette()
-        pal_in.setColor(QPalette.Base, QColor("#f0f0f0"))
-        pal_in.setColor(QPalette.Text, QColor("#000000"))
-        self.input_text.setPalette(pal_in)
-        self.input_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout.addWidget(self.input_text)
-
-        # Format button
-        self.format_button = QPushButton("Format")
-        self.format_button.setFont(mono)
-        self.format_button.clicked.connect(self.format_sql)
-        layout.addWidget(self.format_button)
-
-        # Output label
-        self.output_label = QLabel("Formatted SQL with Inline Comments:")
-        layout.addWidget(self.output_label)
+        # Input editor
+        self.input_text = self._create_scintilla_editor(with_lexer=True)
 
         # Output editor
-        self.output_text = QsciScintilla()
-        self.output_text.setFont(mono)
-        self.output_text.setUtf8(True)
-        lexer_out = QsciLexerSQL()
-        lexer_out.setDefaultFont(mono)
-        lexer_out.setDefaultPaper(QColor("#f0f0f0"))
-        lexer_out.setDefaultColor(QColor("#000000"))
-        self.output_text.setLexer(lexer_out)
-        pal_out = self.output_text.palette()
-        pal_out.setColor(QPalette.Base, QColor("#f0f0f0"))
-        pal_out.setColor(QPalette.Text, QColor("#000000"))
-        self.output_text.setPalette(pal_out)
-        self.output_text.setReadOnly(True)
-        self.output_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout.addWidget(self.output_text)
+        self.output_text = self._create_scintilla_editor(with_lexer=True)
+
+        # Splitter to allow resizing
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.input_text)
+        splitter.addWidget(self.output_text)
+        splitter.setSizes([400, 400])
+        layout.addWidget(splitter)
+
+        # Format + Copy buttons
+        btn_layout = QHBoxLayout()
+        self.format_button = QPushButton("Format")
+        self.format_button.setFont(self.mono)
+        self.format_button.clicked.connect(self.format_sql)
+
+        self.copy_button = QPushButton("Copy Output")
+        self.copy_button.setFont(self.mono)
+        self.copy_button.clicked.connect(self.copy_output)
+
+        btn_layout.addWidget(self.format_button)
+        btn_layout.addWidget(self.copy_button)
+        layout.addLayout(btn_layout)
+
+        # Pretty‐print JSON toggle
+        json_row = QHBoxLayout()
+        self.json_checkbox = QCheckBox("Pretty JSON")
+        self.json_checkbox.setFont(self.mono)
+        self.json_checkbox.setChecked(True)
+        json_row.addWidget(self.json_checkbox)
+        json_row.addStretch()
+        layout.addLayout(json_row)
+
+        # Error message
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: red;")
+        layout.addWidget(self.error_label)
 
         self.setLayout(layout)
 
+    def _load_cached_input(self):
+        try:
+            with open(self.cache_file, "r", encoding="utf-8") as f:
+                self.input_text.setText(f.read())
+        except FileNotFoundError:
+            pass
+
+    def _create_scintilla_editor(self, with_lexer=True, read_only=False):
+        editor = QsciScintilla()
+        editor.setFont(self.mono)
+        editor.setUtf8(True)
+        editor.setReadOnly(read_only)
+        editor.setMarginsFont(self.mono)
+        editor.setMarginType(0, QsciScintilla.NumberMargin)
+        editor.setMarginWidth(0, "0000")
+        editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        pal = editor.palette()
+        pal.setColor(QPalette.Base, QColor("#f0f0f0"))
+        pal.setColor(QPalette.Text, QColor("#000000"))
+        editor.setPalette(pal)
+
+        if with_lexer:
+            lexer = QsciLexerSQL()
+            lexer.setDefaultFont(self.mono)
+            lexer.setDefaultPaper(QColor("#f0f0f0"))
+            lexer.setDefaultColor(QColor("#000000"))
+            self._apply_lexer_theme(lexer)
+            editor.setLexer(lexer)
+
+        return editor
+
+    def _apply_lexer_theme(self, lexer):
+        for style in range(128):
+            lexer.setFont(self.mono, style)
+            lexer.setPaper(QColor("#f0f0f0"), style)  # force light background
+            # Do NOT set foreground color! Keep default SQL colors
+
     def format_sql(self):
         sql = self.input_text.text()
-        # Capture table name dynamically
-        table_m = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
-        cols_m  = re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE)
-        vals_m  = re.search(r"VALUES\s*\(\s*(.*?)\s*\)\s*;", sql, re.DOTALL | re.IGNORECASE)
 
-        if not table_m or not cols_m or not vals_m:
-            self.output_text.setText("❌ Invalid format. Expecting INSERT INTO <table>(...) VALUES (...);")
-            return
+        # Save input to cache
+        with open(self.cache_file, "w", encoding="utf-8") as f:
+            f.write(sql)
 
-        table_name = table_m.group(1)
-        cols       = [c.strip() for c in cols_m.group(1).split(',')]
-        vals       = [v.strip() for v in re.split(r',(?![^()]*\))', vals_m.group(1))]
+        # pass checkbox state as pretty_json flag
+        pretty = self.json_checkbox.isChecked()
+        formatted = SQLFormatter.SQLFormatter.format_all(sql, pretty_json=pretty)
+        if formatted.startswith("❌"):
+            self.error_label.setText(formatted)
+            self.output_text.setText("")
+        else:
+            self.error_label.setText("")
+            self.output_text.setText(formatted)
 
-        if len(cols) != len(vals):
-            self.output_text.setText(f"❌ Column/value count mismatch ({len(cols)} vs {len(vals)}).")
-            return
+    def eventFilter(self, obj, event):
+        if event.type() == event.KeyPress:
+            if ((event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_Return) or
+                    (event.modifiers() & Qt.MetaModifier and event.key() == Qt.Key_Return)):  # Cmd on macOS
+                self.format_sql()
+                return True  # handled
+        return super().eventFilter(obj, event)
 
-        # Align on longest column
-        width = max(len(c) for c in cols)
-        lines = [f"INSERT INTO {table_name} ("]
-        for i, c in enumerate(cols):
-            comma = ',' if i < len(cols) - 1 else ''
-            lines.append(f"    {c.ljust(width)}{comma}")
-        lines.append(") VALUES (")
-        for i, v in enumerate(vals):
-            comma = ',' if i < len(vals) - 1 else ''
-            lines.append(f"    {v.ljust(width)}{comma}  -- {cols[i]}")
-        lines.append(");")
-
-        self.output_text.setText("\n".join(lines))
+    def copy_output(self):
+        QApplication.clipboard().setText(self.output_text.text())
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = InsertFormatter()
+    window = SQLFormatterApp()
     window.show()
     sys.exit(app.exec_())

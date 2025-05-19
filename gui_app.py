@@ -1,5 +1,3 @@
-import sys
-
 from PyQt5.Qsci import QsciScintilla, QsciLexerSQL
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor, QPalette
@@ -131,15 +129,8 @@ class SQLFormatterApp(QWidget):
             if ((event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_Return) or
                     (event.modifiers() & Qt.MetaModifier and event.key() == Qt.Key_Return)):  # Cmd on macOS
                 self.format_sql()
-                return True  # handled
+                return True
         return super().eventFilter(obj, event)
 
     def copy_output(self):
         QApplication.clipboard().setText(self.output_text.text())
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = SQLFormatterApp()
-    window.show()
-    sys.exit(app.exec_())

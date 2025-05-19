@@ -74,7 +74,7 @@ class SQLFormatter:
                     f"    Column/value count mismatch ({len(cols)} vs {len(vals)}).\n\n"
                     f"    Columns: {cols}\n"
                     f"    Values:  {vals}\n"
-                    "    " + "^" * 72
+                    "    " + "^" * 100
             )
 
         indent = "    "

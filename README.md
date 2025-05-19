@@ -3,6 +3,8 @@
 A PyQt5-based GUI application that formats SQL `INSERT`, `UPDATE`, `SET`, and other blocks for improved readability.
 Supports optional embedded JSON formatting with a toggle.
 
+![img.png](img.png)
+
 ## Features
 
 - Auto-detects block type: `INSERT ... VALUES`, `INSERT ... SELECT`, `SET`, `UPDATE`, `CREATE TABLE`, etc.

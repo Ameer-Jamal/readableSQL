@@ -15,7 +15,7 @@ class SQLFormatter:
             upper = part.upper()
 
             # INSERT ... SELECT
-            if upper.startswith("INSERT INTO") and "SELECT" in upper:
+            if re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b", part, re.IGNORECASE | re.DOTALL):
                 formatted_blocks.append(
                     SQLFormatter.format_insert_select_block(part + ';')
                 )
@@ -59,7 +59,7 @@ class SQLFormatter:
     def format_insert_values_block(sql: str) -> str:
         table_m = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
         cols_m = re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE)
-        vals_m = re.search(r"VALUES\s*\(\s*(.*?)\s*\)\s*;", sql, re.DOTALL | re.IGNORECASE)
+        vals_m = re.search(r"VALUES\s*\(\s*(.*?)\s*\)", sql, re.DOTALL | re.IGNORECASE)
 
         if not table_m or not cols_m or not vals_m:
             return "❌ Invalid format. Expecting INSERT INTO <table>(...) VALUES (...);"

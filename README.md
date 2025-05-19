@@ -12,14 +12,17 @@ Supports optional embedded JSON formatting with a toggle.
 - Syntax highlighting via QScintilla
 - Ctrl+Enter / Cmd+Enter shortcut for formatting
 - Copy-to-clipboard button
-- Auto-installs dependencies on first run
+- Auto-installs dependencies if missing
 
 ---
 
 ## Setup
 
 ```bash
-git clone https://github.com/your-username/readableSQL.git
+git clone https://github.com/Ameer-Jamal/readableSQL.git
+# Or:
+gh repo clone Ameer-Jamal/readableSQL
+
 cd readableSQL
 
 # (Optional) Use Python 3.12

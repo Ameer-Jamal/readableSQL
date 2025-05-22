@@ -11,11 +11,10 @@ except ImportError:
     from PyQt5 import QtWidgets
     from PyQt5.Qsci import QsciScintilla
 
-# Now import the app UI
-from gui_app import SQLFormatterApp  # assuming you move the PyQt5 class to gui_app.py
-
+from gui_app import SQLFormatterApp
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     window = SQLFormatterApp()
+
     window.show()
     sys.exit(app.exec_())

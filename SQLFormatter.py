@@ -43,6 +43,8 @@ class SQLFormatter:
                 formatted_blocks.append(
                     SQLFormatter.format_alter_table(part + ';')
                 )
+
+            # UPDATE
             elif upper.startswith("UPDATE"):
                 # strict UPDATE formatting
                 upd = SQLFormatter.format_update_block(part + ';')
@@ -50,6 +52,13 @@ class SQLFormatter:
                 if pretty_json:
                     upd = SQLFormatter._format_embedded_json(upd)
                 formatted_blocks.append(upd)
+
+            # DELETE
+            elif upper.startswith("DELETE FROM"):
+                formatted_blocks.append(SQLFormatter.format_delete_block(part + ';'))
+            # DROP TABLE
+            elif upper.startswith("DROP TABLE") or upper.startswith("DROP INDEX"):
+                formatted_blocks.append(SQLFormatter.format_simple_single_line(part + ';'))
             else:
                 formatted_blocks.append(part + ';')
 
@@ -291,6 +300,25 @@ class SQLFormatter:
         lines = block.splitlines()
         return '\n'.join('    ' + line.strip() for line in lines if line.strip())
 
+    @staticmethod
+    def format_delete_block(sql: str) -> str:
+        lines = ["DELETE FROM"]
+        delete_match = re.match(r"DELETE\s+FROM\s+([^\s;]+)", sql, re.IGNORECASE)
+        where_clause = re.split(r"\bWHERE\b", sql, maxsplit=1, flags=re.IGNORECASE)
+        if delete_match:
+            table = delete_match.group(1)
+            lines[0] = f"DELETE FROM {table}"
+            if len(where_clause) > 1:
+                conditions = re.split(r'\s+AND\s+', where_clause[1].rstrip(';'), flags=re.IGNORECASE)
+                lines.append("WHERE")
+                lines += [f"    {cond.strip()}" for cond in conditions]
+        else:
+            return sql.strip()
+        return "\n".join(lines) + ";"
+
+    @staticmethod
+    def format_simple_single_line(sql: str) -> str:
+        return sql.strip()
 
 def smart_split_csv(s: str) -> list[str]:
     parts = []

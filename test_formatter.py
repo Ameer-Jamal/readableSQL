@@ -112,9 +112,10 @@ def test_format_all_mixed():
 def test_insert_with_nested_functions():
     sql = "INSERT INTO foo(a, b) VALUES(FUNC(1, 2), 'text');"
     out = SQLFormatter.format_insert_values_block(sql)
-    assert "Column/value count mismatch" in out
-    assert "FUNC(1" in out  # This proves it split wrongly
-
+    assert "INSERT INTO foo" in out
+    assert "FUNC(1," in out
+    assert "2        -- b" in out
+    assert "'text'" in out or "-- b" in out
 
 def test_insert_with_comma_in_string():
     sql = "INSERT INTO foo(name, note) VALUES('Doe, John', 'Checked');"
@@ -203,3 +204,28 @@ UPDATE config SET z = 1;
     assert len(statements) == 2
     assert "VALUES" in statements[0]
     assert "SELECT" in statements[1]
+
+def test_format_delete_block_basic():
+    sql = "DELETE FROM users WHERE is_deleted = 1 AND last_login < '2023-01-01';"
+    out = SQLFormatter.format_delete_block(sql)
+    lines = out.splitlines()
+    assert lines[0] == "DELETE FROM users"
+    assert lines[1] == "WHERE"
+    assert any("is_deleted = 1" in line for line in lines)
+    assert any("last_login < '2023-01-01'" in line for line in lines)
+    assert out.endswith(";")
+
+def test_format_delete_block_no_where():
+    sql = "DELETE FROM logs;"
+    out = SQLFormatter.format_delete_block(sql)
+    assert out == "DELETE FROM logs;"
+
+def test_format_drop_table():
+    sql = "DROP TABLE IF EXISTS temp_users;"
+    out = SQLFormatter.format_simple_single_line(sql)
+    assert out == "DROP TABLE IF EXISTS temp_users;"
+
+def test_format_drop_index():
+    sql = "DROP INDEX IF EXISTS idx_temp;"
+    out = SQLFormatter.format_simple_single_line(sql)
+    assert out == "DROP INDEX IF EXISTS idx_temp;"

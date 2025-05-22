@@ -6,110 +6,161 @@ class SQLFormatter:
     @staticmethod
     def format_all(sql: str, pretty_json: bool = True) -> str:
         parts = re.split(r';\s*\n', sql.strip(), flags=re.DOTALL)
+        if not parts or (len(parts) == 1 and not parts[0].strip()):  # Handle empty or whitespace-only input
+            return ""
+
         formatted_blocks = []
 
-        for part in parts:
-            part = part.strip()
-            if not part:
+        for part_content in parts:
+            part_content = part_content.strip()
+            if not part_content:
                 continue
-            upper = part.upper()
+
+            upper_part = part_content.upper()
 
             # INSERT ... SELECT
-            if re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b", part, re.IGNORECASE | re.DOTALL):
-                formatted_blocks.append(
-                    SQLFormatter.format_insert_select_block(part + ';')
-                )
+            if re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b", part_content, re.IGNORECASE | re.DOTALL):
+                formatted_part = SQLFormatter.format_insert_select_block(
+                    part_content + ";")  # Add ; for consistent parsing
 
             # INSERT ... VALUES
-            elif upper.startswith("INSERT INTO"):
-                formatted_blocks.append(
-                    SQLFormatter.format_insert_values_block(part + ';')
-                )
+            elif upper_part.startswith("INSERT INTO"):
+                formatted_part = SQLFormatter.format_insert_values_block(part_content + ";")
 
-            # Pure SET var = ...;  → our new, strict formatter
-            elif upper.startswith("SET") and re.match(r'^SET\s+[@\w]+\s*[:=]', part.strip(), re.IGNORECASE):
-                formatted_blocks.append(
-                    SQLFormatter.format_set_block(part + ';')
-                )
+            elif upper_part.startswith("SET") and re.match(r'^SET\s+[@\w]+\s*[:=]', part_content, re.IGNORECASE):
+                formatted_part = SQLFormatter.format_set_block(part_content + ";")
 
-            # CREATE TABLE
-            elif upper.startswith("CREATE TABLE"):
-                formatted_blocks.append(
-                    SQLFormatter.format_create_table(part + ';')
-                )
+            elif upper_part.startswith("CREATE TABLE"):
+                formatted_part = SQLFormatter.format_create_table(part_content + ";")
 
-            # ALTER TABLE
-            elif upper.startswith("ALTER TABLE"):
-                formatted_blocks.append(
-                    SQLFormatter.format_alter_table(part + ';')
-                )
+            elif upper_part.startswith("ALTER TABLE"):
+                formatted_part = SQLFormatter.format_alter_table(part_content + ";")
 
-            # UPDATE
-            elif upper.startswith("UPDATE"):
-                # strict UPDATE formatting
-                upd = SQLFormatter.format_update_block(part + ';')
-                # only pretty‐print embedded JSON if the flag is on
+            elif upper_part.startswith("UPDATE"):
+                upd = SQLFormatter.format_update_block(part_content + ";")
                 if pretty_json:
                     upd = SQLFormatter._format_embedded_json(upd)
-                formatted_blocks.append(upd)
+                formatted_part = upd
 
-            # DELETE
-            elif upper.startswith("DELETE FROM"):
-                formatted_blocks.append(SQLFormatter.format_delete_block(part + ';'))
-            # DROP TABLE
-            elif upper.startswith("DROP TABLE") or upper.startswith("DROP INDEX"):
-                formatted_blocks.append(SQLFormatter.format_simple_single_line(part + ';'))
+            elif upper_part.startswith("DELETE FROM"):
+                formatted_part = SQLFormatter.format_delete_block(part_content + ";")
+
+            elif upper_part.startswith("DROP TABLE") or upper_part.startswith("DROP INDEX"):
+                formatted_part = SQLFormatter.format_simple_single_line(part_content + ";")
             else:
-                formatted_blocks.append(part + ';')
+                # For unrecognized statements, just pass them through with their semicolon.
+                if not part_content.strip().endswith(';'):
+                    formatted_part = part_content + ';'
+                else:
+                    formatted_part = part_content
 
-        return "\n\n".join(formatted_blocks)
+            formatted_blocks.append(formatted_part)
+
+        return "\n\n".join(formatted_blocks)  # Always join and return all blocks
 
     @staticmethod
     def format_insert_values_block(sql: str) -> str:
         table_m = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
         cols_m = re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE)
-        vals_m = re.search(r"VALUES\s*\(\s*(.*?)\s*\)", sql, re.DOTALL | re.IGNORECASE)
+        values_block_m = re.search(r"VALUES\s*([\s\S]+?);", sql, re.IGNORECASE)
 
-        if not table_m or not cols_m or not vals_m:
-            return "❌ Invalid format. Expecting INSERT INTO <table>(...) VALUES (...);"
+        if not table_m or not cols_m or not values_block_m:
+            return f"❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause."
 
         table_name = table_m.group(1)
-        cols = [c.strip() for c in cols_m.group(1).split(',')]
-        vals = smart_split_csv(vals_m.group(1))
+        cols_str = cols_m.group(1)
+        cols = [c.strip() for c in cols_str.split(',')]
 
-        if len(cols) != len(vals):
-            return (
-                    "❌ Mismatch Found:\n"
-                    f"    Column/value count mismatch ({len(cols)} vs {len(vals)}).\n\n"
-                    f"    Columns: {cols}\n"
-                    f"    Values:  {vals}\n"
-                    "    " + "^" * 100
-            )
+        values_content_raw = values_block_m.group(1).strip()
+        individual_row_strings_content = []
+
+        temp_delimiter = "<ROW_DELIMITER_TEMP_VALS>"
+        processed_for_split = re.sub(r'\)\s*,\s*\(', f"){temp_delimiter}(", values_content_raw)
+
+        if temp_delimiter in processed_for_split:
+            row_parts_with_parens = processed_for_split.split(temp_delimiter)
+        else:
+            row_parts_with_parens = [values_content_raw]
+
+        for row_part_with_parens in row_parts_with_parens:
+            row_part_stripped = row_part_with_parens.strip()
+            if row_part_stripped.startswith("(") and row_part_stripped.endswith(")"):
+                individual_row_strings_content.append(row_part_stripped[1:-1].strip())
+            elif not row_part_stripped:
+                continue
+            else:
+                return f"❌ Error parsing rows in VALUES. Ensure rows are correctly parenthesized and separated by commas (e.g., VALUES (r1v1, r1v2), (r2v1, r2v2))."
+
+        if not individual_row_strings_content:
+            if values_content_raw == "()":
+                if not cols:
+                    return f"INSERT INTO {table_name}\nVALUES ();"
+                else:
+                    return (
+                        f"❌ Mismatch for table '{table_name}': {len(cols)} columns ({', '.join(cols)}) defined, but VALUES clause is empty '()'.")
+            return f"❌ No value rows found in VALUES clause for table '{table_name}'."
 
         indent = "    "
-        # build val+comma entries
-        val_comma = [
-            vals[i] + ("," if i < len(vals) - 1 else "")
-            for i in range(len(vals))
-        ]
-        max_len = max(len(v) for v in val_comma)
-
-        lines = [f"INSERT INTO {table_name} ("]
+        output_lines = [f"INSERT INTO {table_name} ("]
         for i, col in enumerate(cols):
             comma = ',' if i < len(cols) - 1 else ''
-            lines.append(f"{indent}{col}{comma}")
-        lines.append(") VALUES (")
+            output_lines.append(f"{indent}{col}{comma}")
 
-        for v, col in zip(val_comma, cols):
-            # if it ends with comma: pad = max_len-len(v)+1, else +2
-            if v.endswith(','):
-                pad = max_len - len(v) + 1
+        output_lines.append(") VALUES")
+
+        for row_idx, row_values_str_content in enumerate(individual_row_strings_content):
+            normalized_row_values_str = re.sub(r'\s*\n\s*', ' ', row_values_str_content.strip())
+            vals_for_this_row = smart_split_csv(normalized_row_values_str)
+
+            if not vals_for_this_row and not cols:
+                if row_idx == 0:
+                    output_lines.append(f"{indent}(")
+                else:
+                    output_lines.append(f"{indent},(")
+                output_lines.append(f"{indent})")
+                continue
+            elif not vals_for_this_row and cols:
+                return (
+                    f"❌ Mismatch in row {row_idx + 1} for table '{table_name}': Values are empty, but {len(cols)} columns are defined: {', '.join(cols)}."
+                )
+
+            if len(cols) != len(vals_for_this_row):
+                return (
+                    f"❌ Mismatch in row {row_idx + 1} for table '{table_name}':\n"
+                    f"    Expected {len(cols)} values for columns: {', '.join(cols)}\n"
+                    f"    But found {len(vals_for_this_row)} values: {', '.join(vals_for_this_row)}"
+                )
+
+            if row_idx == 0:
+                output_lines.append(f"{indent}(")
             else:
-                pad = max_len - len(v) + 2
-            lines.append(f"{indent}{v}{' ' * pad}-- {col}")
+                output_lines.append(f"{indent},(")
 
-        lines.append(");")
-        return "\n".join(lines)
+            val_comma_for_this_row = [
+                vals_for_this_row[i] + ("," if i < len(vals_for_this_row) - 1 else "")
+                for i in range(len(vals_for_this_row))
+            ]
+
+            max_len_for_this_row = 0
+            if val_comma_for_this_row:
+                max_len_for_this_row = max(len(v) for v in val_comma_for_this_row)
+
+            inner_indent = indent + "    "
+
+            for v_idx, v_with_comma in enumerate(val_comma_for_this_row):
+                col_name = cols[v_idx]
+                pad_val = max_len_for_this_row - len(v_with_comma)
+                if not v_with_comma.endswith(','):
+                    pad_val += 1
+                pad_val = max(0, pad_val)
+                output_lines.append(f"{inner_indent}{v_with_comma}{' ' * (pad_val + 1)}-- {col_name}")
+
+            output_lines.append(f"{indent})")
+
+        if output_lines and not output_lines[-1].endswith(";"):
+            output_lines[-1] = output_lines[-1] + ";"
+
+        return "\n".join(output_lines)
 
     @staticmethod
     def format_insert_select_block(sql: str) -> str:
@@ -322,26 +373,35 @@ class SQLFormatter:
 
 def smart_split_csv(s: str) -> list[str]:
     parts = []
-    current = []
-    in_quotes = False
-    escape = False
-
-    for char in s:
-        if escape:
-            current.append(char)
-            escape = False
-        elif char == "\\":
-            current.append(char)
-            escape = True
-        elif char == "'":
-            in_quotes = not in_quotes
-            current.append(char)
-        elif char == "," and not in_quotes:
-            parts.append("".join(current).strip())
-            current = []
-        else:
-            current.append(char)
-
-    if current:
-        parts.append("".join(current).strip())
+    current_chars = []
+    in_single_quotes = False
+    escape_next_char = False
+    parentheses_level = 0
+    for char_idx, char in enumerate(s):
+        if escape_next_char:
+            current_chars.append(char)
+            escape_next_char = False
+            continue
+        if char == "\\":
+            current_chars.append(char)
+            escape_next_char = True
+            continue
+        if char == "'":
+            in_single_quotes = not in_single_quotes
+            current_chars.append(char)
+            continue
+        if not in_single_quotes:
+            if char == '(':
+                parentheses_level += 1
+            elif char == ')':
+                if parentheses_level > 0:
+                    parentheses_level -= 1
+            if char == "," and parentheses_level == 0:
+                parts.append("".join(current_chars).strip())
+                current_chars = []
+                continue
+        current_chars.append(char)
+    if current_chars or not parts and not s.strip() == "": # Add last part
+        parts.append("".join(current_chars).strip())
+    return [p for p in parts if p] # Filter out empty strings that might result from trailing commas etc.
     return parts

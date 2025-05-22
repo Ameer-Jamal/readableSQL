@@ -7,21 +7,26 @@ def test_format_insert_values_block_basic():
         "INSERT INTO foo (\n"
         "    bar,\n"
         "    baz\n"
-        ") VALUES (\n"
-        "    1,    -- bar\n"
-        "    'qux'  -- baz\n"
-        ");"
+        ") VALUES\n"  # Changed
+        "    (\n"      # Changed
+        "        1,    -- bar\n"  # Indentation of values might change
+        "        'qux'  -- baz\n"  # Indentation of values might change
+        "    );"     # Changed
     )
-    assert out == expected
+    assert out.strip() == expected.strip()
 
 
 def test_format_insert_values_block_mismatch():
     sql = "INSERT INTO foo(bar, baz) VALUES(1);"
     out = SQLFormatter.format_insert_values_block(sql)
-    assert "Column/value count mismatch" in out
-    assert "Columns: ['bar', 'baz']" in out
-    assert "Values:  ['1']" in out
+    # print(f"\n--- Output for Mismatch Test ---\n{out}\n---") # For debugging if needed
 
+    # Check for key parts of the new user-friendly error message
+    assert "❌ Mismatch in row 1 for table 'foo'" in out
+    assert "Expected 2 values for columns: bar, baz" in out
+    assert "But found 1 values: 1" in out
+    # The old assertions for "Column/value count mismatch (2 vs 1)" and specific "Columns: [...]", "Values: [...]"
+    # are now incorporated into the more readable sentence.
 def test_format_insert_select_block_basic():
     sql = "INSERT INTO foo(col1, col2) SELECT a, b FROM bar;"
     out = SQLFormatter.format_insert_select_block(sql)
@@ -112,10 +117,17 @@ def test_format_all_mixed():
 def test_insert_with_nested_functions():
     sql = "INSERT INTO foo(a, b) VALUES(FUNC(1, 2), 'text');"
     out = SQLFormatter.format_insert_values_block(sql)
-    assert "INSERT INTO foo" in out
-    assert "FUNC(1," in out
-    assert "2        -- b" in out
-    assert "'text'" in out or "-- b" in out
+    expected = (
+        "INSERT INTO foo (\n"
+        "    a,\n"
+        "    b\n"
+        ") VALUES\n"  
+        "    (\n"      
+        "        FUNC(1, 2), -- a\n"  # Indentation
+        "        'text'       -- b\n"  # Indentation
+        "    );"
+    )
+    assert out.strip() == expected.strip()
 
 def test_insert_with_comma_in_string():
     sql = "INSERT INTO foo(name, note) VALUES('Doe, John', 'Checked');"
@@ -155,10 +167,11 @@ def test_format_all_with_unrecognized_block():
 
 
 def test_malformed_insert_missing_values():
-    sql = "INSERT INTO foo(bar, baz)"
-    out = SQLFormatter.format_insert_values_block(sql)
-    assert out.startswith("❌ Invalid format")
-
+    sql = "INSERT INTO foo(bar, baz)"  # Missing VALUES clause
+    # format_insert_values_block expects a semicolon at the end of the statement string for its regex.
+    out = SQLFormatter.format_insert_values_block(sql + ";")
+    # Check for the new user-friendly error message
+    assert out.startswith("❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause.")
 
 def test_embedded_json_toggle():
     sql = """UPDATE config SET data = '{"a":1,"b":[2,3]}';"""
@@ -187,10 +200,12 @@ WHERE id = 4;"""
 
 
 def test_insert_with_no_semicolon():
-    sql = "INSERT INTO foo(x, y) VALUES(1, 2)"
+    sql = "INSERT INTO foo(x, y) VALUES(1, 2)" # No semicolon
+    # format_insert_values_block expects a semicolon from the way format_all splits
     out = SQLFormatter.format_insert_values_block(sql + ";")
-    assert "VALUES (" in out
-    assert out.endswith(");")
+    assert ") VALUES\n" in out # Check for VALUES on its line
+    assert "\n    (" in out     # Check for ( on the next indented line
+    assert out.strip().endswith(");")
 
 
 def test_extract_insert_statements_with_mixed_input():

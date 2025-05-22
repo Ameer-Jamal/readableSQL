@@ -190,24 +190,25 @@ class SQLFormatterApp(QWidget):
     def save_checkbox_states(self):
         self.settings.setValue("prettyJson", self.json_checkbox.isChecked())
 
-
     def format_sql(self):
         sql = self.input_text.text()
         with open(self.cache_file, "w", encoding="utf-8") as f:
             f.write(sql)
         pretty = self.json_checkbox.isChecked()
+
         if hasattr(SQLFormatter, 'SQLFormatter') and hasattr(SQLFormatter.SQLFormatter, 'format_all'):
-            formatted = SQLFormatter.SQLFormatter.format_all(sql, pretty_json=pretty)
+            try:
+                formatted_output = SQLFormatter.SQLFormatter.format_all(sql, pretty_json=pretty)
+            except Exception as e:
+                formatted_output = f"❌ Critical error during formatting: {str(e)}\n\nPlease check the input SQL or report this bug."
+                import traceback
+                print(f"CRITICAL FORMATTING ERROR: {traceback.format_exc()}")
         else:
-            self.error_label.setText("❌ SQLFormatter module not configured correctly.");
-            self.output_text.setText("");
-            return
-        if formatted.startswith("❌"):
-            self.error_label.setText(formatted);
-            self.output_text.setText("")
-        else:
-            self.error_label.setText("");
-            self.output_text.setText(formatted)
+            formatted_output = "❌ SQLFormatter module not configured correctly."
+
+        self.output_text.setText(formatted_output)  # Always set the output_text
+        # Clear it always, as errors are in the output block
+        self.error_label.setText("")
 
     def eventFilter(self, obj, event):
         if event.type() == event.KeyPress:

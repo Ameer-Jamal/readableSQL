@@ -17,12 +17,11 @@ class SQLFormatter:
 
             upper_part = part_content.upper()
 
-            # INSERT ... SELECT
-            if re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b", part_content, re.IGNORECASE | re.DOTALL):
-                formatted_part = SQLFormatter.format_insert_select_block(
-                    part_content + ";")  # Add ; for consistent parsing
+            if re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b",
+                         part_content,
+                         re.IGNORECASE | re.DOTALL):
+                formatted_part = SQLFormatter.format_insert_select_block(part_content + ";")
 
-            # INSERT ... VALUES
             elif upper_part.startswith("INSERT INTO"):
                 formatted_part = SQLFormatter.format_insert_values_block(part_content + ";")
 
@@ -36,16 +35,16 @@ class SQLFormatter:
                 formatted_part = SQLFormatter.format_alter_table(part_content + ";")
 
             elif upper_part.startswith("UPDATE"):
-                upd = SQLFormatter.format_update_block(part_content + ";")
+                formatted_part = SQLFormatter.format_update_block(part_content + ";")
                 if pretty_json:
-                    upd = SQLFormatter._format_embedded_json(upd)
-                formatted_part = upd
+                    formatted_part = SQLFormatter._format_embedded_json(formatted_part)
 
             elif upper_part.startswith("DELETE FROM"):
                 formatted_part = SQLFormatter.format_delete_block(part_content + ";")
 
             elif upper_part.startswith("DROP TABLE") or upper_part.startswith("DROP INDEX"):
                 formatted_part = SQLFormatter.format_simple_single_line(part_content + ";")
+
             else:
                 # For unrecognized statements, just pass them through with their semicolon.
                 if not part_content.strip().endswith(';'):
@@ -54,7 +53,6 @@ class SQLFormatter:
                     formatted_part = part_content
 
             formatted_part = SQLFormatter.format_case_expression(formatted_part)
-
             formatted_blocks.append(formatted_part)
 
         return "\n\n".join(formatted_blocks)  # Always join and return all blocks
@@ -293,18 +291,20 @@ class SQLFormatter:
     @staticmethod
     def format_update_block(sql: str) -> str:
         """
-        If only one assignment after SET, collapse whitespace:
-          UPDATE foo SET col = val WHERE cond;
-        → "UPDATE foo SET col = val WHERE cond;"
-        If multiple comma-separated assignments, break into:
+        Reformats:
+          UPDATE foo SET col1 = val1, col2 = val2 WHERE cond;
+        into:
           UPDATE foo
             SET
               col1 = val1,
               col2 = val2
           WHERE cond;
+        (Does not itself pretty-print JSON; JSON should be handled by format_all.)
         """
-        # First, collapse all lines into one big string so regex can see everything.
+        # 1) Collapse all lines into one string
         joined = " ".join(line.strip() for line in sql.strip().splitlines())
+
+        # 2) Match UPDATE <table> SET <assigns> WHERE <cond>
         m = re.match(
             r'UPDATE\s+([^\s]+)\s+SET\s+(.*?)\s+WHERE\s+(.*)',
             joined,
@@ -313,21 +313,18 @@ class SQLFormatter:
         if not m:
             return sql.strip()
 
-        table = m.group(1).strip()
+        table   = m.group(1).strip()
         assigns = m.group(2).strip().rstrip(';')
-        where = m.group(3).strip().rstrip(';')
+        where   = m.group(3).strip().rstrip(';')
 
-        # Split assignments on top-level commas (not inside braces/brackets)
+        # 3) Split assignments on commas not inside braces/brackets
         parts = [p.strip() for p in re.split(r',(?![^{\[]*[}\]])', assigns)]
-        # If only one assignment, collapse whitespace:
-        if len(parts) == 1:
-            return re.sub(r'\s+', ' ', sql.strip()) + ";"
 
-        # Otherwise, multi-line format with two spaces before "SET"
+        # 4) Build multi-line output
         indent = "  "
         out = [f"UPDATE {table}", f"{indent}SET"]
         for i, part in enumerate(parts):
-            comma = ',' if i < len(parts) - 1 else ''
+            comma = "," if i < len(parts) - 1 else ""
             out.append(f"{indent*2}{part}{comma}")
         out.append(f"WHERE {where};")
         return "\n".join(out)
@@ -395,20 +392,48 @@ class SQLFormatter:
 
     @staticmethod
     def _format_embedded_json(stmt: str) -> str:
-        def repl(m):
-            prefix, json_str = m.group('prefix'), m.group('json')
+        def find_balanced_json(text, start):
+            brace_level = 0
+            in_str = False
+            escape = False
+            for i in range(start, len(text)):
+                c = text[i]
+                if c == '\\' and not escape:
+                    escape = True
+                    continue
+                if c == '"' and not escape:
+                    in_str = not in_str
+                elif not in_str:
+                    if c == '{':
+                        brace_level += 1
+                    elif c == '}':
+                        brace_level -= 1
+                        if brace_level == 0:
+                            return i
+                escape = False
+            return -1
+
+        pattern = re.compile(r"(=)\s*'({)", re.IGNORECASE)
+        offset = 0
+        while True:
+            match = pattern.search(stmt, offset)
+            if not match:
+                break
+            start_json = match.start(2)
+            end_json = find_balanced_json(stmt, start_json)
+            if end_json == -1:
+                break
+
+            json_str = stmt[start_json:end_json + 1]
             try:
                 parsed = json.loads(json_str)
                 pretty = json.dumps(parsed, indent=4)
-                return f"{prefix}'{pretty}'"
+                stmt = stmt[:start_json] + pretty + stmt[end_json + 1:]
+                offset = start_json + len(pretty)
             except json.JSONDecodeError:
-                return m.group(0)
+                offset = end_json + 1
+        return stmt
 
-        pattern = re.compile(
-            r"""(?P<prefix>(SET|=)\s*[^\s=]+\s*=\s*)'(?P<json>\{(?:[^']|\\')*?\})'""",
-            re.IGNORECASE | re.DOTALL
-        )
-        return pattern.sub(repl, stmt)
     @staticmethod
     def _indent_sql(block: str) -> str:
         lines = block.splitlines()

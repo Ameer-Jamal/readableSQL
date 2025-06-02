@@ -7,9 +7,9 @@ INSERT INTO logs(user_id,action,detail)VALUES(101,'login',CONCAT('User ','John D
 INSERT INTO logs(user_id,action,detail) SELECT id,'auto-login',CONCAT('Auto-logged in at ',CURRENT_TIMESTAMP) FROM "users" WHERE is_active=TRUE;
 UPDATE "users" SET metadata='{"role":"editor","preferences":{"darkMode":true,"notifications":false}}' WHERE id=101;
 UPDATE "users" SET metadata=JSON_SET(metadata,'$.lastLogin',DATE_FORMAT(NOW(),'%Y-%m-%dT%H:%i:%s')) WHERE id=102;
+UPDATE "users"
 
 -- JSON PRETTY-PRINT DEMO
-UPDATE "users"
 SET metadata='{"settings":{"theme":"dark","layout":{"panels":["left","right"],"sizes":[20,80]},"features":{"beta":true,"notifications":["email","sms"],"security":{"twoFactor":false,"questions":["pet","city"]}}},"profile":{"displayName":"AmeerJ","tags":["developer","sql","pyqt5"],"preferences":{"fontSize":14,"showLineNumbers":true}}}'
 WHERE id=102;
 

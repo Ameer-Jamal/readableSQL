@@ -149,6 +149,12 @@ class SQLFormatterApp(QWidget):
         self.error_label.setStyleSheet("color: red;")
         self.error_label.setVisible(False)  # Keep it hidden as errors are in output
         layout.addWidget(self.error_label)
+
+        sig = QLabel("© 2025 Ameer Jamal")
+        sig.setFont(QFont("Courier New", 11, italic=True))
+        sig.setStyleSheet("color: gray;")
+        sig.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(sig)
         self.setLayout(layout)
         self.toggle_theme()
 

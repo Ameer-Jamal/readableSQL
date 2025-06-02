@@ -240,3 +240,84 @@ def test_format_drop_index():
     sql = "DROP INDEX IF EXISTS idx_temp;"
     out = SQLFormatter.format_simple_single_line(sql)
     assert out == "DROP INDEX IF EXISTS idx_temp;"
+
+def test_format_case_expression_basic():
+    sql = "SELECT CASE WHEN a = 1 THEN 'one' WHEN a = 2 THEN 'two' ELSE 'other' END AS val FROM tbl;"
+    out = SQLFormatter.format_all(sql)
+
+    expected = (
+        "SELECT CASE\n"
+        "    WHEN a = 1 THEN 'one'\n"
+        "    WHEN a = 2 THEN 'two'\n"
+        "    ELSE 'other'\n"
+        "END AS val FROM tbl;"
+    )
+
+    assert out.strip() == expected.strip()
+
+def test_format_delete_block_with_and_preserved():
+    sql = "DELETE FROM users WHERE is_active = FALSE AND created_at < '2023-01-01';"
+    out = SQLFormatter.format_delete_block(sql)
+    lines = out.splitlines()
+
+    # First line must be "DELETE FROM users"
+    assert lines[0] == "DELETE FROM users"
+
+    # Second line must be "WHERE"
+    assert lines[1] == "WHERE"
+
+    # Third line: first condition, no "AND" prefix
+    assert lines[2].strip() == "is_active = FALSE"
+
+    # Fourth line: must begin with "AND "
+    assert lines[3].startswith("    AND ")
+    assert "created_at < '2023-01-01'" in lines[3]
+
+    # Ensure final output ends with a semicolon
+    assert out.strip().endswith(";")
+def test_format_create_table_multiple_columns():
+    sql = 'CREATE TABLE t(a INT, b VARCHAR(10), c JSON);'
+    out = SQLFormatter.format_create_table(sql)
+    lines = out.splitlines()
+    # First line should be "CREATE TABLE t ("
+    assert lines[0] == "CREATE TABLE t ("
+    # There should be exactly three column lines (with commas on the first two)
+    assert lines[1].strip() == "a INT,"
+    assert lines[2].strip() == "b VARCHAR(10),"
+    assert lines[3].strip() == "c JSON"
+    # Last line should be ");"
+    assert lines[4] == ");"
+
+def test_format_alter_table_multiple_actions():
+    sql = "ALTER TABLE foo ADD COLUMN x INT, DROP COLUMN y, RENAME TO foo2;"
+    out = SQLFormatter.format_alter_table(sql)
+    lines = out.splitlines()
+    # First line is the header
+    assert lines[0] == "ALTER TABLE foo"
+    # Next lines should be indented and end with commas except the last
+    assert lines[1].strip() == "ADD COLUMN x INT,"
+    assert lines[2].strip() == "DROP COLUMN y,"
+    assert lines[3].strip() == "RENAME TO foo2"
+    # Final line is just a semicolon
+    assert lines[4] == ";"
+
+def test_format_update_block_multiple_assignments():
+    sql = "UPDATE tbl SET a = 1, b = 2, c = 3 WHERE id = 99;"
+    out = SQLFormatter.format_update_block(sql)
+    lines = out.splitlines()
+    # First line
+    assert lines[0] == "UPDATE tbl"
+    # Exactly two spaces before SET
+    assert lines[1] == "  SET"
+    # Three assignment lines (each with comma except the last)
+    assert lines[2].strip() == "a = 1,"
+    assert lines[3].strip() == "b = 2,"
+    assert lines[4].strip() == "c = 3"
+    # WHERE clause on its own line
+    assert lines[5] == "WHERE id = 99;"
+
+def test_format_drop_table_whitespace_collapsed():
+    sql = "DROP TABLE    IF EXISTS   test_table   ;"
+    out = SQLFormatter.format_simple_single_line(sql)
+    # Exactly one space between each token, and a single semicolon
+    assert out == "DROP TABLE IF EXISTS test_table ;"

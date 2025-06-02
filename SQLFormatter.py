@@ -1,14 +1,13 @@
 import json
 import re
 
-
 class SQLFormatter:
     @staticmethod
     def format_all(sql: str, pretty_json: bool = True) -> str:
         parts = re.split(r';\s*\n', sql.strip(), flags=re.DOTALL)
-        if not parts or (len(parts) == 1 and not parts[0].strip()):  # Handle empty or whitespace-only input
+        if not parts or (len(parts) == 1 and not parts[0].strip()):
+            # Handle empty or whitespace-only input
             return ""
-
         formatted_blocks = []
 
         for part_content in parts:
@@ -53,6 +52,8 @@ class SQLFormatter:
                     formatted_part = part_content + ';'
                 else:
                     formatted_part = part_content
+
+            formatted_part = SQLFormatter.format_case_expression(formatted_part)
 
             formatted_blocks.append(formatted_part)
 
@@ -212,64 +213,124 @@ class SQLFormatter:
 
     @staticmethod
     def format_create_table(sql: str) -> str:
-        lines = sql.splitlines()
-        formatted = []
+        """
+        If there is exactly one CREATE TABLE clause, collapse whitespace:
+          CREATE TABLE foo(col1 TYPE, col2 TYPE);
+        → (no change but trimmed/collapsed)
+        If there are multiple columns (comma-separated), break out on separate lines:
+          CREATE TABLE foo (
+              col1 TYPE,
+              col2 TYPE,
+              …
+          );
+        """
+        stripped = sql.strip().rstrip(';')
+        # Try to match: CREATE TABLE <name> ( … )
+        m = re.match(
+            r'(CREATE\s+TABLE\s+[^\(]+)\s*\((.*)\)\s*',
+            stripped,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        if not m:
+            return sql.strip()
+
+        header = m.group(1).strip()
+        body = m.group(2).strip()
+        # Split columns on top-level commas
+        cols = [c.strip() for c in re.split(r',(?![^(]*\))', body)]
+        # If there's only one column definition, just collapse whitespace and return one line
+        if len(cols) == 1:
+            return re.sub(r'\s+', ' ', sql.strip()) + ";"
+
+        # Otherwise, multi-line format
         indent = "    "
-        for line in lines:
-            stripped = line.strip()
-            if stripped.upper().startswith("CREATE TABLE"):
-                formatted.append(stripped)
-            elif stripped.startswith("(") or stripped.endswith(",") or stripped.endswith(")"):
-                formatted.append(indent + stripped)
-            else:
-                formatted.append(indent + stripped + ',')
-        return "\n".join(formatted)
+        out = [f"{header} ("]
+        for i, col in enumerate(cols):
+            comma = ',' if i < len(cols) - 1 else ''
+            out.append(f"{indent}{col}{comma}")
+        out.append(");")
+        return "\n".join(out)
+
 
     @staticmethod
     def format_alter_table(sql: str) -> str:
-        return re.sub(r'\s+', ' ', sql.strip(), flags=re.MULTILINE)
+        """
+        If there’s exactly one ALTER action, collapse whitespace:
+          ALTER TABLE foo ADD COLUMN bar int ;
+        → "ALTER TABLE foo ADD COLUMN bar int ;"
+        If there are multiple actions (comma-separated), break them onto separate lines:
+          ALTER TABLE foo
+              ADD COLUMN bar int,
+              DROP COLUMN baz;
+        """
+        stripped = sql.strip().rstrip(';')  # remove any existing trailing semicolons
+        m = re.match(
+            r'(ALTER\s+TABLE\s+[^\s]+)\s+(.*)',
+            stripped,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        if not m:
+            return sql.strip()
+
+        header = m.group(1).strip()
+        rest = m.group(2).strip()
+        # Split on top-level commas:
+        actions = [a.strip() for a in re.split(r',(?![^(]*\))', rest)]
+        # If only one action, collapse whitespace and return one line
+        if len(actions) == 1:
+            single_line = re.sub(r'\s+', ' ', stripped).strip()
+            return single_line + " ;"
+
+        # Otherwise, multi-line format
+        indent = "    "
+        out = [header]
+        for i, act in enumerate(actions):
+            comma = ',' if i < len(actions) - 1 else ''
+            out.append(f"{indent}{act}{comma}")
+        out.append(";")
+        return "\n".join(out)
 
     @staticmethod
     def format_update_block(sql: str) -> str:
-        lines = sql.splitlines()
-        formatted = []
-        buffer = []
-        in_assign = False
+        """
+        If only one assignment after SET, collapse whitespace:
+          UPDATE foo SET col = val WHERE cond;
+        → "UPDATE foo SET col = val WHERE cond;"
+        If multiple comma-separated assignments, break into:
+          UPDATE foo
+            SET
+              col1 = val1,
+              col2 = val2
+          WHERE cond;
+        """
+        # First, collapse all lines into one big string so regex can see everything.
+        joined = " ".join(line.strip() for line in sql.strip().splitlines())
+        m = re.match(
+            r'UPDATE\s+([^\s]+)\s+SET\s+(.*?)\s+WHERE\s+(.*)',
+            joined,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        if not m:
+            return sql.strip()
 
-        start_re = re.compile(r'^SET\s+[@\w]+\s*[:=]', re.IGNORECASE)
-        cont_re = re.compile(r'^@?\w+\s*[:=]')
+        table = m.group(1).strip()
+        assigns = m.group(2).strip().rstrip(';')
+        where = m.group(3).strip().rstrip(';')
 
-        for line in lines:
-            stripped = line.strip()
-            if start_re.match(stripped):
-                in_assign = True
-                # drop leading "SET"
-                rest = stripped[len(stripped.split(None, 1)[0]):].strip()
-                buffer.append(rest)
-            elif in_assign and cont_re.match(stripped):
-                buffer.append(stripped)
-            else:
-                if in_assign:
-                    formatted.append("  SET")
-                    joint = ' '.join(buffer)
-                    parts = re.split(r',(?![^{}]*\})', joint)
-                    for p in parts[:-1]:
-                        formatted.append(f"    {p.strip()},")
-                    # last part without trailing comma
-                    formatted.append(f"    {parts[-1].strip()}")
-                    buffer.clear()
-                    in_assign = False
-                formatted.append(line)
+        # Split assignments on top-level commas (not inside braces/brackets)
+        parts = [p.strip() for p in re.split(r',(?![^{\[]*[}\]])', assigns)]
+        # If only one assignment, collapse whitespace:
+        if len(parts) == 1:
+            return re.sub(r'\s+', ' ', sql.strip()) + ";"
 
-        if in_assign:
-            formatted.append("  SET")
-            joint = ' '.join(buffer)
-            parts = re.split(r',(?![^{}]*\})', joint)
-            for p in parts[:-1]:
-                formatted.append(f"    {p.strip()},")
-            formatted.append(f"    {parts[-1].strip()}")
-
-        return "\n".join(formatted)
+        # Otherwise, multi-line format with two spaces before "SET"
+        indent = "  "
+        out = [f"UPDATE {table}", f"{indent}SET"]
+        for i, part in enumerate(parts):
+            comma = ',' if i < len(parts) - 1 else ''
+            out.append(f"{indent*2}{part}{comma}")
+        out.append(f"WHERE {where};")
+        return "\n".join(out)
 
     @staticmethod
     def format_json_like_sql_field(field: str) -> str:
@@ -335,17 +396,19 @@ class SQLFormatter:
     @staticmethod
     def _format_embedded_json(stmt: str) -> str:
         def repl(m):
-            prefix, raw = m.group('prefix'), m.group('json')
+            prefix, json_str = m.group('prefix'), m.group('json')
             try:
-                obj = json.loads(raw)
-                pretty = json.dumps(obj, indent=4)
+                parsed = json.loads(json_str)
+                pretty = json.dumps(parsed, indent=4)
                 return f"{prefix}'{pretty}'"
-            except:
+            except json.JSONDecodeError:
                 return m.group(0)
 
-        pattern = r"""(?P<prefix>\bSET\b.*?=\s*|UPDATE\s+\w+\s+SET\s+\w+\s*=\s*)'(?P<json>\{.*?\})'"""
-        return re.sub(pattern, repl, stmt, flags=re.IGNORECASE | re.DOTALL)
-
+        pattern = re.compile(
+            r"""(?P<prefix>(SET|=)\s*[^\s=]+\s*=\s*)'(?P<json>\{(?:[^']|\\')*?\})'""",
+            re.IGNORECASE | re.DOTALL
+        )
+        return pattern.sub(repl, stmt)
     @staticmethod
     def _indent_sql(block: str) -> str:
         lines = block.splitlines()
@@ -360,16 +423,55 @@ class SQLFormatter:
             table = delete_match.group(1)
             lines[0] = f"DELETE FROM {table}"
             if len(where_clause) > 1:
+                # split on AND, then re-emit each condition with "AND " on lines ≥1
                 conditions = re.split(r'\s+AND\s+', where_clause[1].rstrip(';'), flags=re.IGNORECASE)
                 lines.append("WHERE")
-                lines += [f"    {cond.strip()}" for cond in conditions]
+            else:
+                # no WHERE at all → just return without formatting
+                return sql.strip()
         else:
             return sql.strip()
+
+        for i, cond in enumerate(conditions):
+            prefix = "    "
+            if i > 0:
+                prefix += "AND "
+            lines.append(f"{prefix}{cond.strip()}")
+
         return "\n".join(lines) + ";"
 
     @staticmethod
     def format_simple_single_line(sql: str) -> str:
-        return sql.strip()
+        return re.sub(r'\s+', ' ', sql.strip())
+
+    @staticmethod
+    def format_case_expression(sql: str) -> str:
+        def _case_repl(match):
+            full_block = match.group(0)
+            inner = full_block[4:-3].strip()
+
+            when_then_pairs = re.findall(
+                r"WHEN\s+(?P<cond>.+?)\s+THEN\s+(?P<res>.+?)(?=(?:WHEN|ELSE|$))",
+                inner,
+                flags=re.IGNORECASE | re.DOTALL
+            )
+
+            else_match = re.search(r"ELSE\s+(?P<else>.+)$", inner, flags=re.IGNORECASE | re.DOTALL)
+
+            lines = ["CASE"]
+            for cond, res in when_then_pairs:
+                lines.append(f"    WHEN {cond.strip()} THEN {res.strip()}")
+
+            if else_match:
+                else_part = else_match.group("else").strip()
+                lines.append(f"    ELSE {else_part}")
+
+            lines.append("END")
+            return "\n".join(lines)
+
+        # Apply to every CASE…END (non-greedy so it stops at the first END)
+        return re.sub(r"CASE\b.*?END\b", _case_repl, sql, flags=re.IGNORECASE | re.DOTALL)
+
 
 def smart_split_csv(s: str) -> list[str]:
     parts = []
@@ -404,4 +506,3 @@ def smart_split_csv(s: str) -> list[str]:
     if current_chars or not parts and not s.strip() == "": # Add last part
         parts.append("".join(current_chars).strip())
     return [p for p in parts if p] # Filter out empty strings that might result from trailing commas etc.
-    return parts

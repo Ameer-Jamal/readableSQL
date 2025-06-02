@@ -15,7 +15,9 @@ A PyQt5-based GUI application designed to format various SQL statements for enha
     - `CREATE TABLE`
     - `ALTER TABLE`
     - `DELETE FROM`
-    - `DROP TABLE / INDEX`
+    - `DROP TABLE / INDEX`    
+    - `CASE WHEN THEN`
+
 - **Intelligent JSON Handling**:
     - Pretty-prints embedded JSON strings within `UPDATE` statements (toggleable).
 - **User-Friendly Interface**:

@@ -1,6 +1,7 @@
 import json
 import re
 
+
 class SQLFormatter:
     @staticmethod
     def format_all(sql: str, pretty_json: bool = True) -> str:
@@ -249,7 +250,6 @@ class SQLFormatter:
         out.append(");")
         return "\n".join(out)
 
-
     @staticmethod
     def format_alter_table(sql: str) -> str:
         """
@@ -313,9 +313,9 @@ class SQLFormatter:
         if not m:
             return sql.strip()
 
-        table   = m.group(1).strip()
+        table = m.group(1).strip()
         assigns = m.group(2).strip().rstrip(';')
-        where   = m.group(3).strip().rstrip(';')
+        where = m.group(3).strip().rstrip(';')
 
         # 3) Split assignments on commas not inside braces/brackets
         parts = [p.strip() for p in re.split(r',(?![^{\[]*[}\]])', assigns)]
@@ -325,7 +325,7 @@ class SQLFormatter:
         out = [f"UPDATE {table}", f"{indent}SET"]
         for i, part in enumerate(parts):
             comma = "," if i < len(parts) - 1 else ""
-            out.append(f"{indent*2}{part}{comma}")
+            out.append(f"{indent * 2}{part}{comma}")
         out.append(f"WHERE {where};")
         return "\n".join(out)
 
@@ -528,6 +528,6 @@ def smart_split_csv(s: str) -> list[str]:
                 current_chars = []
                 continue
         current_chars.append(char)
-    if current_chars or not parts and not s.strip() == "": # Add last part
+    if current_chars or not parts and not s.strip() == "":  # Add last part
         parts.append("".join(current_chars).strip())
-    return [p for p in parts if p] # Filter out empty strings that might result from trailing commas etc.
+    return [p for p in parts if p]  # Filter out empty strings that might result from trailing commas etc.

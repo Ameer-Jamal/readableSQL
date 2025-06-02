@@ -9,9 +9,9 @@ def test_format_insert_values_block_basic():
         "    baz\n"
         ") VALUES\n"  # Changed
         "    (\n"      # Changed
-        "        1,    -- bar\n"  # Indentation of values might change
-        "        'qux'  -- baz\n"  # Indentation of values might change
-        "    );"     # Changed
+        "        1,    -- bar\n"  
+        "        'qux'  -- baz\n" 
+        "    );"
     )
     assert out.strip() == expected.strip()
 
@@ -19,14 +19,11 @@ def test_format_insert_values_block_basic():
 def test_format_insert_values_block_mismatch():
     sql = "INSERT INTO foo(bar, baz) VALUES(1);"
     out = SQLFormatter.format_insert_values_block(sql)
-    # print(f"\n--- Output for Mismatch Test ---\n{out}\n---") # For debugging if needed
-
     # Check for key parts of the new user-friendly error message
     assert "❌ Mismatch in row 1 for table 'foo'" in out
     assert "Expected 2 values for columns: bar, baz" in out
     assert "But found 1 values: 1" in out
-    # The old assertions for "Column/value count mismatch (2 vs 1)" and specific "Columns: [...]", "Values: [...]"
-    # are now incorporated into the more readable sentence.
+
 def test_format_insert_select_block_basic():
     sql = "INSERT INTO foo(col1, col2) SELECT a, b FROM bar;"
     out = SQLFormatter.format_insert_select_block(sql)
@@ -63,7 +60,7 @@ def test_format_set_block_pure():
 def test_format_set_block_skip_json():
     sql = "SET @J = {'a':1};"
     out = SQLFormatter.format_set_block(sql)
-    assert out == sql  # unchanged because JSON-like RHS
+    assert out == sql
 
 
 def test_format_update_block_basic():
@@ -170,7 +167,6 @@ def test_malformed_insert_missing_values():
     sql = "INSERT INTO foo(bar, baz)"  # Missing VALUES clause
     # format_insert_values_block expects a semicolon at the end of the statement string for its regex.
     out = SQLFormatter.format_insert_values_block(sql + ";")
-    # Check for the new user-friendly error message
     assert out.startswith("❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause.")
 
 def test_embedded_json_toggle():

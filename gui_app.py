@@ -13,7 +13,7 @@ import SQLFormatter
 class DroppableQsciScintilla(QsciScintilla):
     def __init__(self, parent_app=None, *args, **kwargs):  # parent_app to call format_sql
         super().__init__(*args, **kwargs)
-        self.parent_app = parent_app  # Store a reference to the main app if needed
+        self.parent_app = parent_app
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event):
@@ -38,7 +38,7 @@ class DroppableQsciScintilla(QsciScintilla):
                 file_path = urls[0].toLocalFile()  # Get the first dropped file path
                 if file_path:  # Ensure it's a local file
                     try:
-                        # Check file extension (optional, but good for SQL files)
+                        # Check file extension
                         if file_path.lower().endswith(('.sql', '.txt')):
                             with open(file_path, 'r', encoding='utf-8') as f:
                                 content = f.read()
@@ -47,18 +47,18 @@ class DroppableQsciScintilla(QsciScintilla):
 
                             # Optionally, trigger formatting automatically after drop
                             if self.parent_app and hasattr(self.parent_app, 'format_sql_from_input'):
-                                self.parent_app.format_sql_from_input()  # Call a method on the main app
+                                self.parent_app.format_sql_from_input()
                             return  # Handled
                         else:
                             print(f"Ignored non-SQL/TXT file: {file_path}")
-                            event.ignore()  # Or super().dropEvent(event)
+                            event.ignore()
                     except Exception as e:
                         print(f"Error reading dropped file {file_path}: {e}")
                         if self.parent_app and hasattr(self.parent_app, 'show_user_error'):
                             self.parent_app.show_user_error(f"Could not load file: {e}")
-                        event.ignore()  # Or super().dropEvent(event)
+                        event.ignore()
                 else:
-                    super().dropEvent(event)  # Not a local file path
+                    super().dropEvent(event)
             else:
                 super().dropEvent(event)  # No URLs
         elif mime_data.hasText():  # Handle dropped text
@@ -85,10 +85,9 @@ class SQLFormatterApp(QWidget):
         self._setup_ui()
         self._load_cached_input()
         if self.input_text.text().strip():
-            self.format_sql_from_input()  # Use the new method name
+            self.format_sql_from_input()
 
         self.installEventFilter(self)
-        # Restore window geometry (moved here from format_sql)
         geometry = self.settings.value("windowGeometry")
         if geometry:
             self.restoreGeometry(geometry)
@@ -128,7 +127,7 @@ class SQLFormatterApp(QWidget):
         self.splitter.addWidget(self.output_text)
         initial_window_height = self.height() if self.height() > 100 else 600
         self.splitter.setSizes([initial_window_height // 2, initial_window_height // 2])
-        layout.addWidget(self.splitter)  # Add splitter to layout
+        layout.addWidget(self.splitter)
         # Save/restore splitter state
         self.splitter.splitterMoved.connect(lambda: self.settings.setValue("splitterState", self.splitter.saveState()))
         state = self.settings.value("splitterState")
@@ -162,7 +161,7 @@ class SQLFormatterApp(QWidget):
         except Exception as e:
             print(f"Error loading cached input: {e}")
 
-    def _create_scintilla_editor(self, with_lexer=True, read_only=False, make_droppable=False):  # Added make_droppable
+    def _create_scintilla_editor(self, with_lexer=True, read_only=False, make_droppable=False):
         if make_droppable:
             editor = DroppableQsciScintilla(parent_app=self)
         else:

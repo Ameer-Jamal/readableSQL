@@ -532,7 +532,7 @@ class SQLFormatter:
             inner = full_block[4:-3].strip()
 
             when_then_pairs = re.findall(
-                r"WHEN\s+(?P<cond>[^;]+)\s+THEN\s+(?P<res>[^;]+)(?=\s+WHEN|\s+ELSE|$)",
+                r"WHEN\s+(?P<cond>.+?)\s+THEN\s+(?P<res>.+?)(?=(?:WHEN|ELSE|$))",
                 inner,
                 flags=re.IGNORECASE | re.DOTALL,
             )

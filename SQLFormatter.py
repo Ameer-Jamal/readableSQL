@@ -5,8 +5,7 @@ from typing import List
 
 class SQLFormatter:
     """
-    A utility class for formatting SQL statements (INSERT, UPDATE, DELETE, etc.)
-    to enhance readability and enforce consistent style across statements.
+    The main class containing the logic for formatting the SQL statements.
     """
 
     # Class-level regex patterns
@@ -262,7 +261,7 @@ class SQLFormatter:
             re.DOTALL | re.IGNORECASE,
         )
         insert_selects = re.findall(
-            r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\s+.*?FROM.*?;",
+            r"INSERT\s+INTO\s+[^\s(]+\s*\([^)]*\)\s*SELECT\s+[^;]*?FROM[^;]*?;",
             sql,
             re.DOTALL | re.IGNORECASE,
         )
@@ -533,7 +532,7 @@ class SQLFormatter:
             inner = full_block[4:-3].strip()
 
             when_then_pairs = re.findall(
-                r"WHEN\s+(?P<cond>.+?)\s+THEN\s+(?P<res>.+?)(?=(?:WHEN|ELSE|$))",
+                r"WHEN\s+(?P<cond>[^;]+)\s+THEN\s+(?P<res>[^;]+)(?=\s+WHEN|\s+ELSE|$)",
                 inner,
                 flags=re.IGNORECASE | re.DOTALL,
             )

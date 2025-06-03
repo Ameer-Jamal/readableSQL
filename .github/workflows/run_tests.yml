@@ -10,6 +10,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -17,23 +18,20 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Install everything in requirements.txt
           pip install -r requirements.txt
-          pip install pytest pytest-qt
+          # Ensure PyQt5 and QScintilla are available for GUI tests
+          pip install pytest pytest-qt PyQt5 QScintilla
 
-      - name: Start Xvfb
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-          Xvfb :99 &
-          export DISPLAY=:99
-
-      - name: Run tests
-        env:
-          DISPLAY: :99
-        run: |
-          pytest testing/
+      - name: Run tests inside Xvfb
+        uses: GabrielBB/xvfb-action@v1
+        with:
+          run: |
+            # Explicitly set QT to offscreen (just in case)
+            export QT_QPA_PLATFORM=offscreen
+            pytest testing/

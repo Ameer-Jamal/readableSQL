@@ -47,16 +47,13 @@ class SQLFormatter:
                 formatted_part = SQLFormatter.format_simple_single_line(part_content + ";")
 
             else:
-                # For unrecognized statements, just pass them through with their semicolon.
-                if not part_content.strip().endswith(';'):
-                    formatted_part = part_content + ';'
-                else:
-                    formatted_part = part_content
+                formatted_part = part_content if part_content.endswith(';') else part_content + ';'
 
             formatted_part = SQLFormatter.format_case_expression(formatted_part)
+            formatted_part = re.sub(r';{2,}$', ';', formatted_part)
             formatted_blocks.append(formatted_part)
 
-        return "\n\n".join(formatted_blocks)  # Always join and return all blocks
+        return "\n\n".join(formatted_blocks)
 
     @staticmethod
     def format_insert_values_block(sql: str) -> str:
@@ -306,7 +303,7 @@ class SQLFormatter:
 
         # 2) Match UPDATE <table> SET <assigns> WHERE <cond>
         m = re.match(
-            r'UPDATE\s+([^\s]+)\s+SET\s+(.*?)\s+WHERE\s+(.*)',
+            r'UPDATE\s+([^\s]+)\s+SET\s+(.*?)(?:\s+WHERE\s+(.*?))?;',
             joined,
             flags=re.IGNORECASE | re.DOTALL
         )
@@ -314,20 +311,37 @@ class SQLFormatter:
             return sql.strip()
 
         table = m.group(1).strip()
-        assigns = m.group(2).strip().rstrip(';')
-        where = m.group(3).strip().rstrip(';')
+        assigns = m.group(2).strip()
+        where_clause = m.group(3).strip() if m.group(3) else None
 
-        # 3) Split assignments on commas not inside braces/brackets
-        parts = [p.strip() for p in re.split(r',(?![^{\[]*[}\]])', assigns)]
+        # Split on commas not inside single quotes
+        parts = [p.strip() for p in re.split(r",(?=(?:[^']*'[^']*')*[^']*$)", assigns)]
 
-        # 4) Build multi-line output
         indent = "  "
         out = [f"UPDATE {table}", f"{indent}SET"]
+
         for i, part in enumerate(parts):
             comma = "," if i < len(parts) - 1 else ""
-            out.append(f"{indent * 2}{part}{comma}")
-        out.append(f"WHERE {where};")
-        return "\n".join(out)
+            part = SQLFormatter.format_case_expression(part)
+            lines = part.splitlines()
+
+            if len(lines) == 1:
+                out.append(f"{indent*2}{lines[0]}{comma}")
+            else:
+                out.append(f"{indent*2}{lines[0]}")
+                for line in lines[1:-1]:
+                    out.append(f"{indent*3}{line}")
+                last = lines[-1] + comma
+                out.append(f"{indent*3}{last}")
+
+        if where_clause:
+            out.append(f"WHERE {where_clause};")
+        else:
+            out.append(";")
+
+        result = "\n".join(out)
+        result = re.sub(r"\n;$", ";", result)
+        return result
 
     @staticmethod
     def format_json_like_sql_field(field: str) -> str:
@@ -475,17 +489,33 @@ class SQLFormatter:
             full_block = match.group(0)
             inner = full_block[4:-3].strip()
 
+            # Extract WHEN…THEN pairs
             when_then_pairs = re.findall(
                 r"WHEN\s+(?P<cond>.+?)\s+THEN\s+(?P<res>.+?)(?=(?:WHEN|ELSE|$))",
                 inner,
                 flags=re.IGNORECASE | re.DOTALL
             )
 
+            # Extract optional ELSE
             else_match = re.search(r"ELSE\s+(?P<else>.+)$", inner, flags=re.IGNORECASE | re.DOTALL)
 
             lines = ["CASE"]
             for cond, res in when_then_pairs:
-                lines.append(f"    WHEN {cond.strip()} THEN {res.strip()}")
+                cond = cond.strip()
+                res = res.strip()
+                in_match = re.match(r"(.+?\bIN)\s*\((.+)\)$", cond, flags=re.IGNORECASE | re.DOTALL)
+                if in_match:
+                    in_prefix = in_match.group(1).strip()
+                    in_list = in_match.group(2).strip()
+                    # Split items on commas not inside single quotes
+                    items = [i.strip() for i in re.split(r",(?=(?:[^']*'[^']*')*[^']*$)", in_list)]
+                    lines.append(f"    WHEN {in_prefix} (")
+                    for j, item in enumerate(items):
+                        comma = "," if j < len(items) - 1 else ""
+                        lines.append(f"        {item}{comma}")
+                    lines.append(f"    ) THEN {res}")
+                else:
+                    lines.append(f"    WHEN {cond} THEN {res}")
 
             if else_match:
                 else_part = else_match.group("else").strip()
@@ -494,9 +524,7 @@ class SQLFormatter:
             lines.append("END")
             return "\n".join(lines)
 
-        # Apply to every CASE…END (non-greedy so it stops at the first END)
         return re.sub(r"CASE\b.*?END\b", _case_repl, sql, flags=re.IGNORECASE | re.DOTALL)
-
 
 def smart_split_csv(s: str) -> list[str]:
     parts = []

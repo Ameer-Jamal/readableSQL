@@ -321,3 +321,101 @@ def test_format_drop_table_whitespace_collapsed():
     out = SQLFormatter.format_simple_single_line(sql)
     # Exactly one space between each token, and a single semicolon
     assert out == "DROP TABLE IF EXISTS test_table ;"
+
+
+def test_format_case_expression_with_in_multiple_items():
+    sql = (
+        "SELECT CASE WHEN x IN (1,2,3) THEN 'yes' "
+        "WHEN y IN ('a','b') THEN 'letter' ELSE 'no' END AS result;"
+    )
+    out = SQLFormatter.format_case_expression(sql)
+    expected = (
+        "SELECT CASE\n"
+        "    WHEN x IN (\n"
+        "        1,\n"
+        "        2,\n"
+        "        3\n"
+        "    ) THEN 'yes'\n"
+        "    WHEN y IN (\n"
+        "        'a',\n"
+        "        'b'\n"
+        "    ) THEN 'letter'\n"
+        "    ELSE 'no'\n"
+        "END AS result;"
+    )
+    assert out.strip() == expected.strip()
+
+def test_format_update_block_with_case_in_and_pretty_json_false():
+    sql = "UPDATE t SET data = '{\"alpha\":1,\"beta\":2}', flag = 0 WHERE id = 5;"
+    out = SQLFormatter.format_all(sql, pretty_json=False)
+    # JSON should remain inline, and assignments broken into separate lines
+    assert "UPDATE t" in out
+    assert "  SET" in out
+    assert "    data = '{\"alpha\":1,\"beta\":2}'," in out
+    assert "    flag = 0" in out
+    assert "WHERE id = 5;" in out
+
+def test_format_update_block_with_case_and_multiple_assignments():
+    sql = (
+        "UPDATE users SET status = CASE WHEN active = 1 THEN 'A' WHEN active = 0 THEN 'I' END, "
+        "last_login = NOW() WHERE user_id = 42;"
+    )
+    out = SQLFormatter.format_all(sql)
+    lines = out.splitlines()
+    # Check that STATUS assignment is multi‐line
+    assert lines[0] == "UPDATE users"
+    assert lines[1].strip() == "SET"
+    # "status =" line
+    assert lines[2].strip().startswith("status = CASE")
+    # WHEN … THEN … should stay on one line
+    assert "WHEN active = 1 THEN 'A'" in out
+    assert "WHEN active = 0 THEN 'I'" in out
+    # Next assignment last_login
+    assert any(line.strip().startswith("last_login = NOW()") for line in lines)
+
+def test_format_case_expression_no_in_single_when_then():
+    sql = "SELECT CASE WHEN foo = 10 THEN 'ten' ELSE 'other' END col;"
+    out = SQLFormatter.format_case_expression(sql)
+    expected = (
+        "SELECT CASE\n"
+        "    WHEN foo = 10 THEN 'ten'\n"
+        "    ELSE 'other'\n"
+        "END col;"
+    )
+    assert out.strip() == expected.strip()
+
+def test_format_update_block_without_where_and_case_in():
+    sql = "UPDATE settings SET mode = CASE WHEN enabled=1 THEN 'on' ELSE 'off' END;"
+    out = SQLFormatter.format_all(sql)
+    expected = (
+        "UPDATE settings\n"
+        "  SET\n"
+        "    mode = CASE\n"
+        "      WHEN enabled = 1 THEN 'on'\n"
+        "      ELSE 'off'\n"
+        "    END\n"
+        ";"
+    )
+    # Semicolon should remain on same line as CASE END
+    assert "END;" in out.replace("\n", "")
+    assert "when enabled = 1 then 'on'" not in out.lower()  # ensure uppercase WHEN/THEN formatting
+    assert "UPDATE settings" in out
+
+# Additional edge case: embedded JSON with pretty_json=True inside UPDATE
+def test_format_all_pretty_json_in_update():
+    sql = "UPDATE config SET info = '{\"nested\":{\"a\":10,\"b\":[1,2,3]}}' WHERE id=1;"
+    out = SQLFormatter.format_all(sql, pretty_json=True)
+    # JSON block should be pretty-printed
+    assert "{\n" in out and "\"a\": 10" in out and "\"b\": [" in out
+    # Ensure no inline JSON
+    assert "{\"nested\":{\"a\":10,\"b\":[1,2,3]}}" not in out
+
+def test_format_case_expression_else_only():
+    sql = "SELECT CASE ELSE 'fallback' END col;"
+    out = SQLFormatter.format_case_expression(sql)
+    expected = (
+        "SELECT CASE\n"
+        "    ELSE 'fallback'\n"
+        "END col;"
+    )
+    assert out.strip() == expected.strip()

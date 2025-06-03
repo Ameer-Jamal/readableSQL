@@ -22,4 +22,5 @@ DROP INDEX IF EXISTS idx_users_email ON "users";
 DROP        TABLE IF EXISTS temp_data;
 SELECT id,name,CASE WHEN is_active=TRUE THEN 'active' WHEN is_active=FALSE THEN 'inactive' ELSE 'unknown' END AS status,CASE WHEN JSON_EXTRACT(metadata,'$.role')='"admin"' THEN 'Administrator' WHEN JSON_EXTRACT(metadata,'$.role')='"editor"' THEN 'Editor' ELSE 'User' END AS role_name FROM "users" WHERE id IN (101,102);
 SELECT CONCAT(name,' <',email,'>') AS "user_info",LENGTH(COALESCE(name,'')) AS name_length FROM "users" WHERE name LIKE 'J%';
+UPDATE settings SET status = CASE WHEN active = 1 THEN 'Enabled' WHEN active = 0 THEN 'Disabled' END, last_login = NOW() WHERE user_id = 42;
 -- Random comment here

@@ -1,13 +1,66 @@
 import json
 import re
+from typing import List
 
 
 class SQLFormatter:
+    """
+    A utility class for formatting SQL statements (INSERT, UPDATE, DELETE, etc.)
+    to enhance readability and enforce consistent style across statements.
+    """
+
+    # Class-level regex patterns
+    INSERT_SELECT_PATTERN = re.compile(
+        r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    INSERT_INTO_PATTERN = re.compile(r"^INSERT\s+INTO", re.IGNORECASE)
+    SET_PATTERN = re.compile(r"^SET\s+[@\w]+\s*[:=]", re.IGNORECASE)
+    CREATE_TABLE_PATTERN = re.compile(r"^CREATE TABLE", re.IGNORECASE)
+    ALTER_TABLE_PATTERN = re.compile(r"^ALTER TABLE", re.IGNORECASE)
+    UPDATE_PATTERN = re.compile(r"^UPDATE", re.IGNORECASE)
+    DELETE_FROM_PATTERN = re.compile(r"^DELETE FROM", re.IGNORECASE)
+    DROP_PATTERN = re.compile(r"^(DROP TABLE|DROP INDEX)", re.IGNORECASE)
+
+    # Indentation constants
+    INDENT_1 = "    "
+    INDENT_2 = "  "
+
+    # Mapping of patterns to formatting methods
+    _DISPATCH_MAP = [
+        (INSERT_SELECT_PATTERN, "format_insert_select_block"),
+        (INSERT_INTO_PATTERN, "format_insert_values_block"),
+        (SET_PATTERN, "format_set_block"),
+        (CREATE_TABLE_PATTERN, "format_create_table"),
+        (ALTER_TABLE_PATTERN, "format_alter_table"),
+        (UPDATE_PATTERN, "format_update_block"),
+        (DELETE_FROM_PATTERN, "format_delete_block"),
+        (DROP_PATTERN, "format_simple_single_line"),
+    ]
+
+    @staticmethod
+    def _collapse_whitespace(text: str) -> str:
+        """Collapse all repeated whitespace characters into a single space."""
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _trim_semicolon(text: str) -> str:
+        """Strip trailing whitespace and any semicolons at the end."""
+        return text.strip().rstrip(";")
+
     @staticmethod
     def format_all(sql: str, pretty_json: bool = True) -> str:
-        parts = re.split(r';\s*\n', sql.strip(), flags=re.DOTALL)
+        """
+        Break a multi-statement SQL string into separate blocks, format each block
+        according to its type, and return the concatenated result.
+
+        :param sql: The raw SQL input containing one or more statements.
+        :param pretty_json: Whether to pretty-print embedded JSON within UPDATE statements.
+        :return: A formatted SQL string with blocks separated by blank lines.
+        """
+        sql = sql.strip()
+        parts = re.split(r";\s*\n", sql, flags=re.DOTALL)
         if not parts or (len(parts) == 1 and not parts[0].strip()):
-            # Handle empty or whitespace-only input
             return ""
         formatted_blocks = []
 
@@ -18,61 +71,56 @@ class SQLFormatter:
 
             upper_part = part_content.upper()
 
-            if re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\b",
-                         part_content,
-                         re.IGNORECASE | re.DOTALL):
-                formatted_part = SQLFormatter.format_insert_select_block(part_content + ";")
+            # Dispatch based on the first matching pattern
+            handler_name = None
+            for pattern, method_name in SQLFormatter._DISPATCH_MAP:
+                # For INSERT_SELECT, search the original text; for others, match against upper_part
+                subject = part_content if pattern is SQLFormatter.INSERT_SELECT_PATTERN else upper_part
+                if pattern.search(subject):
+                    handler_name = method_name
+                    break
 
-            elif upper_part.startswith("INSERT INTO"):
-                formatted_part = SQLFormatter.format_insert_values_block(part_content + ";")
-
-            elif upper_part.startswith("SET") and re.match(r'^SET\s+[@\w]+\s*[:=]', part_content, re.IGNORECASE):
-                formatted_part = SQLFormatter.format_set_block(part_content + ";")
-
-            elif upper_part.startswith("CREATE TABLE"):
-                formatted_part = SQLFormatter.format_create_table(part_content + ";")
-
-            elif upper_part.startswith("ALTER TABLE"):
-                formatted_part = SQLFormatter.format_alter_table(part_content + ";")
-
-            elif upper_part.startswith("UPDATE"):
-                formatted_part = SQLFormatter.format_update_block(part_content + ";")
-                if pretty_json:
+            if handler_name:
+                method = getattr(SQLFormatter, handler_name)
+                formatted_part = method(part_content + ";")
+                if handler_name == "format_update_block" and pretty_json:
                     formatted_part = SQLFormatter._format_embedded_json(formatted_part)
-
-            elif upper_part.startswith("DELETE FROM"):
-                formatted_part = SQLFormatter.format_delete_block(part_content + ";")
-
-            elif upper_part.startswith("DROP TABLE") or upper_part.startswith("DROP INDEX"):
-                formatted_part = SQLFormatter.format_simple_single_line(part_content + ";")
-
             else:
-                formatted_part = part_content if part_content.endswith(';') else part_content + ';'
+                formatted_part = part_content if part_content.endswith(";") else part_content + ";"
 
             formatted_part = SQLFormatter.format_case_expression(formatted_part)
-            formatted_part = re.sub(r';{2,}$', ';', formatted_part)
+            formatted_part = re.sub(r";{2,}$", ";", formatted_part)
             formatted_blocks.append(formatted_part)
 
         return "\n\n".join(formatted_blocks)
 
     @staticmethod
     def format_insert_values_block(sql: str) -> str:
+        """
+        Format an INSERT INTO ... VALUES(...) statement with aligned columns, each
+        row on its own lines, and inline comments indicating column names.
+
+        :param sql: The full INSERT statement ending with a semicolon.
+        :return: A pretty-printed INSERT statement or an error string on mismatch.
+        """
         table_m = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
-        cols_m = re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE)
+        cols_m = re.search(
+            r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE
+        )
         values_block_m = re.search(r"VALUES\s*([\s\S]+?);", sql, re.IGNORECASE)
 
         if not table_m or not cols_m or not values_block_m:
-            return f"❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause."
+            return "❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause."
 
         table_name = table_m.group(1)
         cols_str = cols_m.group(1)
-        cols = [c.strip() for c in cols_str.split(',')]
+        cols = [c.strip() for c in cols_str.split(",")]
 
         values_content_raw = values_block_m.group(1).strip()
         individual_row_strings_content = []
 
         temp_delimiter = "<ROW_DELIMITER_TEMP_VALS>"
-        processed_for_split = re.sub(r'\)\s*,\s*\(', f"){temp_delimiter}(", values_content_raw)
+        processed_for_split = re.sub(r"\)\s*,\s*\(", f"){temp_delimiter}(", values_content_raw)
 
         if temp_delimiter in processed_for_split:
             row_parts_with_parens = processed_for_split.split(temp_delimiter)
@@ -86,7 +134,10 @@ class SQLFormatter:
             elif not row_part_stripped:
                 continue
             else:
-                return f"❌ Error parsing rows in VALUES. Ensure rows are correctly parenthesized and separated by commas (e.g., VALUES (r1v1, r1v2), (r2v1, r2v2))."
+                return (
+                    "❌ Error parsing rows in VALUES. Ensure rows are correctly parenthesized "
+                    "and separated by commas (e.g., VALUES (r1v1, r1v2), (r2v1, r2v2))."
+                )
 
         if not individual_row_strings_content:
             if values_content_raw == "()":
@@ -94,20 +145,22 @@ class SQLFormatter:
                     return f"INSERT INTO {table_name}\nVALUES ();"
                 else:
                     return (
-                        f"❌ Mismatch for table '{table_name}': {len(cols)} columns ({', '.join(cols)}) defined, but VALUES clause is empty '()'.")
+                        f"❌ Mismatch for table '{table_name}': {len(cols)} columns "
+                        f"({', '.join(cols)}) defined, but VALUES clause is empty '()'."
+                    )
             return f"❌ No value rows found in VALUES clause for table '{table_name}'."
 
-        indent = "    "
+        indent = SQLFormatter.INDENT_1
         output_lines = [f"INSERT INTO {table_name} ("]
         for i, col in enumerate(cols):
-            comma = ',' if i < len(cols) - 1 else ''
+            comma = "," if i < len(cols) - 1 else ""
             output_lines.append(f"{indent}{col}{comma}")
 
         output_lines.append(") VALUES")
 
         for row_idx, row_values_str_content in enumerate(individual_row_strings_content):
-            normalized_row_values_str = re.sub(r'\s*\n\s*', ' ', row_values_str_content.strip())
-            vals_for_this_row = smart_split_csv(normalized_row_values_str)
+            normalized_row_values_str = re.sub(r"\s*\n\s*", " ", row_values_str_content.strip())
+            vals_for_this_row = SQLFormatter.smart_split_csv(normalized_row_values_str)
 
             if not vals_for_this_row and not cols:
                 if row_idx == 0:
@@ -118,7 +171,8 @@ class SQLFormatter:
                 continue
             elif not vals_for_this_row and cols:
                 return (
-                    f"❌ Mismatch in row {row_idx + 1} for table '{table_name}': Values are empty, but {len(cols)} columns are defined: {', '.join(cols)}."
+                    f"❌ Mismatch in row {row_idx + 1} for table '{table_name}': "
+                    f"Values are empty, but {len(cols)} columns are defined: {', '.join(cols)}."
                 )
 
             if len(cols) != len(vals_for_this_row):
@@ -138,16 +192,13 @@ class SQLFormatter:
                 for i in range(len(vals_for_this_row))
             ]
 
-            max_len_for_this_row = 0
-            if val_comma_for_this_row:
-                max_len_for_this_row = max(len(v) for v in val_comma_for_this_row)
-
-            inner_indent = indent + "    "
+            max_len_for_this_row = max((len(v) for v in val_comma_for_this_row), default=0)
+            inner_indent = indent + SQLFormatter.INDENT_1
 
             for v_idx, v_with_comma in enumerate(val_comma_for_this_row):
                 col_name = cols[v_idx]
                 pad_val = max_len_for_this_row - len(v_with_comma)
-                if not v_with_comma.endswith(','):
+                if not v_with_comma.endswith(","):
                     pad_val += 1
                 pad_val = max(0, pad_val)
                 output_lines.append(f"{inner_indent}{v_with_comma}{' ' * (pad_val + 1)}-- {col_name}")
@@ -161,28 +212,38 @@ class SQLFormatter:
 
     @staticmethod
     def format_insert_select_block(sql: str) -> str:
-        # Extract INSERT INTO table and columns
+        """
+        Format an INSERT INTO ... SELECT ... FROM ... statement, aligning SELECT fields
+        with column names and preserving the remainder of the clause.
+
+        :param sql: The full INSERT...SELECT statement ending with a semicolon.
+        :return: A pretty-printed INSERT...SELECT statement or an error string on mismatch.
+        """
         table_m = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
-        cols_m = re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*SELECT", sql, re.DOTALL | re.IGNORECASE)
+        cols_m = re.search(
+            r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*SELECT", sql, re.DOTALL | re.IGNORECASE
+        )
         select_m = re.search(r"SELECT\s+(.*?)\s+FROM\s", sql, re.DOTALL | re.IGNORECASE)
 
         if not table_m or not cols_m or not select_m:
             return "❌ Invalid format. Expecting INSERT INTO <table>(...) SELECT ..."
 
         table_name = table_m.group(1)
-        cols = [c.strip() for c in cols_m.group(1).split(',')]
-        selects = [s.strip() for s in re.split(r',(?![^()]*\))', select_m.group(1))]
+        cols = [c.strip() for c in cols_m.group(1).split(",")]
+        selects = [
+            s.strip() for s in re.split(r",(?![^()]*\))", select_m.group(1))
+        ]
 
         if len(cols) != len(selects):
             return f"❌ Column/select count mismatch ({len(cols)} vs {len(selects)})."
 
-        indent = "    "
+        indent = SQLFormatter.INDENT_1
         sel_comma = [selects[i] + ("," if i < len(selects) - 1 else "") for i in range(len(selects))]
-        max_len = max(len(s) for s in sel_comma)
+        max_len = max((len(s) for s in sel_comma), default=0)
 
         lines = [f"INSERT INTO {table_name} ("]
         for i, col in enumerate(cols):
-            comma = ',' if i < len(cols) - 1 else ''
+            comma = "," if i < len(cols) - 1 else ""
             lines.append(f"{indent}{col}{comma}")
         lines.append(") SELECT")
 
@@ -194,55 +255,46 @@ class SQLFormatter:
         return "\n".join(lines)
 
     @staticmethod
-    def extract_insert_statements(sql: str) -> list[str]:
+    def extract_insert_statements(sql: str) -> List[str]:
         insert_values = re.findall(
             r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*VALUES\s*\(.*?\);",
             sql,
-            re.DOTALL | re.IGNORECASE
+            re.DOTALL | re.IGNORECASE,
         )
         insert_selects = re.findall(
             r"INSERT\s+INTO\s+[^\s(]+\s*\(.*?\)\s*SELECT\s+.*?FROM.*?;",
             sql,
-            re.DOTALL | re.IGNORECASE
+            re.DOTALL | re.IGNORECASE,
         )
         return insert_values + insert_selects
 
     @staticmethod
     def format_create_table(sql: str) -> str:
         """
-        If there is exactly one CREATE TABLE clause, collapse whitespace:
-          CREATE TABLE foo(col1 TYPE, col2 TYPE);
-        → (no change but trimmed/collapsed)
-        If there are multiple columns (comma-separated), break out on separate lines:
-          CREATE TABLE foo (
-              col1 TYPE,
-              col2 TYPE,
-              …
-          );
+        Format a CREATE TABLE statement so that when multiple columns exist,
+        each column is on its own line with proper indentation.
+        :param sql: The CREATE TABLE statement (optionally ending with semicolon).
+        :return: A single-line or multi-line formatted CREATE TABLE statement.
         """
-        stripped = sql.strip().rstrip(';')
-        # Try to match: CREATE TABLE <name> ( … )
+        stripped = SQLFormatter._trim_semicolon(sql)
         m = re.match(
-            r'(CREATE\s+TABLE\s+[^\(]+)\s*\((.*)\)\s*',
+            r"(CREATE\s+TABLE\s+[^\(]+)\s*\((.*)\)\s*",
             stripped,
-            flags=re.IGNORECASE | re.DOTALL
+            flags=re.IGNORECASE | re.DOTALL,
         )
         if not m:
             return sql.strip()
 
         header = m.group(1).strip()
         body = m.group(2).strip()
-        # Split columns on top-level commas
-        cols = [c.strip() for c in re.split(r',(?![^(]*\))', body)]
-        # If there's only one column definition, just collapse whitespace and return one line
+        cols = [c.strip() for c in re.split(r",(?![^(]*\))", body)]
         if len(cols) == 1:
-            return re.sub(r'\s+', ' ', sql.strip()) + ";"
+            return re.sub(r"\s+", " ", sql.strip()) + ";"
 
-        # Otherwise, multi-line format
-        indent = "    "
+        indent = SQLFormatter.INDENT_1
         out = [f"{header} ("]
         for i, col in enumerate(cols):
-            comma = ',' if i < len(cols) - 1 else ''
+            comma = "," if i < len(cols) - 1 else ""
             out.append(f"{indent}{col}{comma}")
         out.append(");")
         return "\n".join(out)
@@ -250,37 +302,28 @@ class SQLFormatter:
     @staticmethod
     def format_alter_table(sql: str) -> str:
         """
-        If there’s exactly one ALTER action, collapse whitespace:
-          ALTER TABLE foo ADD COLUMN bar int ;
-        → "ALTER TABLE foo ADD COLUMN bar int ;"
-        If there are multiple actions (comma-separated), break them onto separate lines:
-          ALTER TABLE foo
-              ADD COLUMN bar int,
-              DROP COLUMN baz;
+        Format an ALTER TABLE statement. If only one action is present, collapse to a single line.
+        If multiple comma-separated actions exist, place each action on its own line.
+
+        :param sql: The ALTER TABLE statement (optionally ending with semicolon).
+        :return: A formatted ALTER TABLE statement.
         """
-        stripped = sql.strip().rstrip(';')  # remove any existing trailing semicolons
-        m = re.match(
-            r'(ALTER\s+TABLE\s+[^\s]+)\s+(.*)',
-            stripped,
-            flags=re.IGNORECASE | re.DOTALL
-        )
+        stripped = SQLFormatter._trim_semicolon(sql)
+        m = re.match(r"(ALTER\s+TABLE\s+[^\s]+)\s+(.*)", stripped, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return sql.strip()
 
         header = m.group(1).strip()
         rest = m.group(2).strip()
-        # Split on top-level commas:
-        actions = [a.strip() for a in re.split(r',(?![^(]*\))', rest)]
-        # If only one action, collapse whitespace and return one line
+        actions = [a.strip() for a in re.split(r",(?![^(]*\))", rest)]
         if len(actions) == 1:
-            single_line = re.sub(r'\s+', ' ', stripped).strip()
-            return single_line + " ;"
+            single_line = SQLFormatter._collapse_whitespace(stripped)
+            return f"{single_line} ;"
 
-        # Otherwise, multi-line format
-        indent = "    "
+        indent = SQLFormatter.INDENT_1
         out = [header]
         for i, act in enumerate(actions):
-            comma = ',' if i < len(actions) - 1 else ''
+            comma = "," if i < len(actions) - 1 else ""
             out.append(f"{indent}{act}{comma}")
         out.append(";")
         return "\n".join(out)
@@ -288,24 +331,16 @@ class SQLFormatter:
     @staticmethod
     def format_update_block(sql: str) -> str:
         """
-        Reformats:
-          UPDATE foo SET col1 = val1, col2 = val2 WHERE cond;
-        into:
-          UPDATE foo
-            SET
-              col1 = val1,
-              col2 = val2
-          WHERE cond;
-        (Does not itself pretty-print JSON; JSON should be handled by format_all.)
+        Reformat an UPDATE statement so that SET clauses and their assignments are each on their own line.
+        :param sql: The full UPDATE statement ending with a semicolon.
+        :return: A pretty-printed UPDATE statement.
         """
-        # 1) Collapse all lines into one string
-        joined = " ".join(line.strip() for line in sql.strip().splitlines())
+        joined = SQLFormatter._collapse_whitespace(sql)
 
-        # 2) Match UPDATE <table> SET <assigns> WHERE <cond>
         m = re.match(
-            r'UPDATE\s+([^\s]+)\s+SET\s+(.*?)(?:\s+WHERE\s+(.*?))?;',
+            r"UPDATE\s+([^\s]+)\s+SET\s+(.*?)(?:\s+WHERE\s+(.*?))?;",
             joined,
-            flags=re.IGNORECASE | re.DOTALL
+            flags=re.IGNORECASE | re.DOTALL,
         )
         if not m:
             return sql.strip()
@@ -314,10 +349,9 @@ class SQLFormatter:
         assigns = m.group(2).strip()
         where_clause = m.group(3).strip() if m.group(3) else None
 
-        # Split on commas not inside single quotes
         parts = [p.strip() for p in re.split(r",(?=(?:[^']*'[^']*')*[^']*$)", assigns)]
 
-        indent = "  "
+        indent = SQLFormatter.INDENT_2
         out = [f"UPDATE {table}", f"{indent}SET"]
 
         for i, part in enumerate(parts):
@@ -326,13 +360,13 @@ class SQLFormatter:
             lines = part.splitlines()
 
             if len(lines) == 1:
-                out.append(f"{indent*2}{lines[0]}{comma}")
+                out.append(f"{indent * 2}{lines[0]}{comma}")
             else:
-                out.append(f"{indent*2}{lines[0]}")
+                out.append(f"{indent * 2}{lines[0]}")
                 for line in lines[1:-1]:
-                    out.append(f"{indent*3}{line}")
+                    out.append(f"{indent * 3}{line}")
                 last = lines[-1] + comma
-                out.append(f"{indent*3}{last}")
+                out.append(f"{indent * 3}{last}")
 
         if where_clause:
             out.append(f"WHERE {where_clause};")
@@ -346,81 +380,67 @@ class SQLFormatter:
     @staticmethod
     def format_json_like_sql_field(field: str) -> str:
         try:
-            import json
             parsed = json.loads(field)
             return json.dumps(parsed, indent=4)
-        except:
+        except json.JSONDecodeError:
             return field
 
     @staticmethod
     def format_set_block(sql: str) -> str:
-        lines = sql.strip().splitlines()
-        parsed = []
+        """
+        Format one or more SET assignments so that each SET is aligned and column names are padded.
+        If any RHS appears to be JSON (starts with '{' or '['), skip reformatting.
 
+        :param sql: One or more SET statements, each optionally ending with semicolon.
+        :return: A formatted multiline SET block or the original SQL on mismatch/JSON.
+        """
+        lines = sql.strip().splitlines()
         set_pattern = re.compile(
             r"^\s*SET\s+(@?[A-Z0-9_]+)\s*([:=]{1,2})\s*(.+?);?\s*$",
-            re.IGNORECASE
+            re.IGNORECASE,
         )
-        # only pure SET‐lines
         if not all(set_pattern.match(l) for l in lines):
             return sql
 
+        parsed = []
         for line in lines:
             m = set_pattern.match(line)
-            lhs, op, rhs = m.group(1), m.group(2), m.group(3).strip().rstrip(';')
-            # skip JSON‐like values
-            if rhs.startswith('{') or rhs.startswith('['):
+            lhs, op, rhs = m.group(1), m.group(2), m.group(3).strip().rstrip(";")
+            if rhs.startswith("{") or rhs.startswith("["):
                 return sql
             parsed.append((lhs, op, rhs))
 
         max_lhs = max(len(lhs) for lhs, _, _ in parsed)
-
         out = []
         for lhs, op, rhs in parsed:
             out.append(f"SET {lhs.ljust(max_lhs)} {op} {rhs};")
         return "\n".join(out)
 
     @staticmethod
-    def _format_insert_select_block(stmt: str) -> str:
-        parts = re.split(r"\bSELECT\b", stmt, flags=re.IGNORECASE)
-        if len(parts) < 2:
-            return stmt + ';'
-
-        before_select = parts[0].strip()
-        select_clause = "SELECT " + parts[1].strip()
-
-        return before_select + "\n" + SQLFormatter._indent_sql(select_clause) + ";"
-
-    @staticmethod
-    def _format_create_table(stmt: str) -> str:
-        header_match = re.match(r"(CREATE\s+TABLE\s+[^\(]+)\s*\((.*)\)", stmt, re.IGNORECASE | re.DOTALL)
-        if not header_match:
-            return stmt + ';'
-
-        header = header_match.group(1)
-        body = header_match.group(2)
-        lines = [l.strip() for l in re.split(r',(?![^\(]*\))', body.strip()) if l.strip()]
-        formatted_body = ',\n    '.join(lines)
-
-        return f"{header} (\n    {formatted_body}\n);"
-
-    @staticmethod
     def _format_embedded_json(stmt: str) -> str:
-        def find_balanced_json(text, start):
+        """
+        Detect embedded JSON strings (single-quoted) in an UPDATE statement,
+        parse them, and replace with an indented JSON block.
+
+        :param stmt: The UPDATE statement potentially containing JSON.
+        :return: The statement with pretty-printed JSON sections.
+        """
+
+        def find_balanced_json(text: str, start: int) -> int:
             brace_level = 0
             in_str = False
             escape = False
             for i in range(start, len(text)):
                 c = text[i]
-                if c == '\\' and not escape:
+                if c == "\\" and not escape:
                     escape = True
                     continue
                 if c == '"' and not escape:
                     in_str = not in_str
                 elif not in_str:
-                    if c == '{':
+                    if c == "{":
                         brace_level += 1
-                    elif c == '}':
+                    elif c == "}":
                         brace_level -= 1
                         if brace_level == 0:
                             return i
@@ -438,11 +458,11 @@ class SQLFormatter:
             if end_json == -1:
                 break
 
-            json_str = stmt[start_json:end_json + 1]
+            json_str = stmt[start_json : end_json + 1]
             try:
                 parsed = json.loads(json_str)
                 pretty = json.dumps(parsed, indent=4)
-                stmt = stmt[:start_json] + pretty + stmt[end_json + 1:]
+                stmt = stmt[:start_json] + pretty + stmt[end_json + 1 :]
                 offset = start_json + len(pretty)
             except json.JSONDecodeError:
                 offset = end_json + 1
@@ -450,11 +470,23 @@ class SQLFormatter:
 
     @staticmethod
     def _indent_sql(block: str) -> str:
+        """
+        Prepend four spaces to each non-empty line in the given SQL block.
+
+        :param block: A multi-line SQL string.
+        :return: Indented SQL block.
+        """
         lines = block.splitlines()
-        return '\n'.join('    ' + line.strip() for line in lines if line.strip())
+        return "\n".join("    " + line.strip() for line in lines if line.strip())
 
     @staticmethod
     def format_delete_block(sql: str) -> str:
+        """
+        Format a DELETE FROM ... WHERE ... statement so that each AND condition is on its own line.
+
+        :param sql: The DELETE statement ending with a semicolon.
+        :return: A pretty-printed DELETE statement or original SQL if no WHERE.
+        """
         lines = ["DELETE FROM"]
         delete_match = re.match(r"DELETE\s+FROM\s+([^\s;]+)", sql, re.IGNORECASE)
         where_clause = re.split(r"\bWHERE\b", sql, maxsplit=1, flags=re.IGNORECASE)
@@ -462,17 +494,15 @@ class SQLFormatter:
             table = delete_match.group(1)
             lines[0] = f"DELETE FROM {table}"
             if len(where_clause) > 1:
-                # split on AND, then re-emit each condition with "AND " on lines ≥1
-                conditions = re.split(r'\s+AND\s+', where_clause[1].rstrip(';'), flags=re.IGNORECASE)
+                conditions = re.split(r"\s+AND\s+", where_clause[1].rstrip(";"), flags=re.IGNORECASE)
                 lines.append("WHERE")
             else:
-                # no WHERE at all → just return without formatting
                 return sql.strip()
         else:
             return sql.strip()
 
         for i, cond in enumerate(conditions):
-            prefix = "    "
+            prefix = SQLFormatter.INDENT_1
             if i > 0:
                 prefix += "AND "
             lines.append(f"{prefix}{cond.strip()}")
@@ -481,22 +511,32 @@ class SQLFormatter:
 
     @staticmethod
     def format_simple_single_line(sql: str) -> str:
-        return re.sub(r'\s+', ' ', sql.strip())
+        """
+        Collapse all whitespace in a single-line statement (e.g., DROP TABLE, DROP INDEX).
+
+        :param sql: The statement to collapse.
+        :return: A single-line statement with no extra spaces.
+        """
+        return re.sub(r"\s+", " ", sql.strip())
 
     @staticmethod
     def format_case_expression(sql: str) -> str:
-        def _case_repl(match):
+        """
+        Expand inline CASE...END expressions into multiline form, with WHEN/THEN aligned
+        and items inside IN(...) expanded as well.
+
+        :param sql: An SQL snippet possibly containing a CASE expression.
+        :return: The SQL with formatted CASE blocks.
+        """
+        def _case_repl(match: re.Match) -> str:
             full_block = match.group(0)
             inner = full_block[4:-3].strip()
 
-            # Extract WHEN…THEN pairs
             when_then_pairs = re.findall(
                 r"WHEN\s+(?P<cond>.+?)\s+THEN\s+(?P<res>.+?)(?=(?:WHEN|ELSE|$))",
                 inner,
-                flags=re.IGNORECASE | re.DOTALL
+                flags=re.IGNORECASE | re.DOTALL,
             )
-
-            # Extract optional ELSE
             else_match = re.search(r"ELSE\s+(?P<else>.+)$", inner, flags=re.IGNORECASE | re.DOTALL)
 
             lines = ["CASE"]
@@ -507,7 +547,6 @@ class SQLFormatter:
                 if in_match:
                     in_prefix = in_match.group(1).strip()
                     in_list = in_match.group(2).strip()
-                    # Split items on commas not inside single quotes
                     items = [i.strip() for i in re.split(r",(?=(?:[^']*'[^']*')*[^']*$)", in_list)]
                     lines.append(f"    WHEN {in_prefix} (")
                     for j, item in enumerate(items):
@@ -526,36 +565,45 @@ class SQLFormatter:
 
         return re.sub(r"CASE\b.*?END\b", _case_repl, sql, flags=re.IGNORECASE | re.DOTALL)
 
-def smart_split_csv(s: str) -> list[str]:
-    parts = []
-    current_chars = []
-    in_single_quotes = False
-    escape_next_char = False
-    parentheses_level = 0
-    for char_idx, char in enumerate(s):
-        if escape_next_char:
-            current_chars.append(char)
-            escape_next_char = False
-            continue
-        if char == "\\":
-            current_chars.append(char)
-            escape_next_char = True
-            continue
-        if char == "'":
-            in_single_quotes = not in_single_quotes
-            current_chars.append(char)
-            continue
-        if not in_single_quotes:
-            if char == '(':
-                parentheses_level += 1
-            elif char == ')':
-                if parentheses_level > 0:
-                    parentheses_level -= 1
-            if char == "," and parentheses_level == 0:
-                parts.append("".join(current_chars).strip())
-                current_chars = []
+    @staticmethod
+    def smart_split_csv(s: str) -> List[str]:
+        """
+        Split a CSV string at top-level commas while respecting single quotes and parentheses.
+
+        :param s: A comma-separated string, possibly containing nested parentheses or quoted commas.
+        :return: A list of tokens.
+        """
+        parts = []
+        current_chars = []
+        in_single_quotes = False
+        escape_next_char = False
+        parentheses_level = 0
+
+        for char in s:
+            if escape_next_char:
+                current_chars.append(char)
+                escape_next_char = False
                 continue
-        current_chars.append(char)
-    if current_chars or not parts and not s.strip() == "":  # Add last part
-        parts.append("".join(current_chars).strip())
-    return [p for p in parts if p]  # Filter out empty strings that might result from trailing commas etc.
+            if char == "\\":
+                current_chars.append(char)
+                escape_next_char = True
+                continue
+            if char == "'":
+                in_single_quotes = not in_single_quotes
+                current_chars.append(char)
+                continue
+            if not in_single_quotes:
+                if char == "(":
+                    parentheses_level += 1
+                elif char == ")":
+                    if parentheses_level > 0:
+                        parentheses_level -= 1
+                if char == "," and parentheses_level == 0:
+                    parts.append("".join(current_chars).strip())
+                    current_chars = []
+                    continue
+            current_chars.append(char)
+
+        if current_chars or (not parts and s.strip() != ""):
+            parts.append("".join(current_chars).strip())
+        return [p for p in parts if p]

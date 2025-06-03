@@ -7,8 +7,8 @@ def test_format_insert_values_block_basic():
         "INSERT INTO foo (\n"
         "    bar,\n"
         "    baz\n"
-        ") VALUES\n"  # Changed
-        "    (\n"      # Changed
+        ") VALUES\n"  
+        "    (\n"      
         "        1,    -- bar\n"  
         "        'qux'  -- baz\n" 
         "    );"
@@ -19,7 +19,7 @@ def test_format_insert_values_block_basic():
 def test_format_insert_values_block_mismatch():
     sql = "INSERT INTO foo(bar, baz) VALUES(1);"
     out = SQLFormatter.format_insert_values_block(sql)
-    # Check for key parts of the new user-friendly error message
+
     assert "❌ Mismatch in row 1 for table 'foo'" in out
     assert "Expected 2 values for columns: bar, baz" in out
     assert "But found 1 values: 1" in out
@@ -120,8 +120,8 @@ def test_insert_with_nested_functions():
         "    b\n"
         ") VALUES\n"  
         "    (\n"      
-        "        FUNC(1, 2), -- a\n"  # Indentation
-        "        'text'       -- b\n"  # Indentation
+        "        FUNC(1, 2), -- a\n"  
+        "        'text'       -- b\n"  
         "    );"
     )
     assert out.strip() == expected.strip()
@@ -196,7 +196,7 @@ WHERE id = 4;"""
 
 
 def test_insert_with_no_semicolon():
-    sql = "INSERT INTO foo(x, y) VALUES(1, 2)" # No semicolon
+    sql = "INSERT INTO foo(x, y) VALUES(1, 2)"
     # format_insert_values_block expects a semicolon from the way format_all splits
     out = SQLFormatter.format_insert_values_block(sql + ";")
     assert ") VALUES\n" in out # Check for VALUES on its line
@@ -396,12 +396,12 @@ def test_format_update_block_without_where_and_case_in():
         "    END\n"
         ";"
     )
-    # Semicolon should remain on same line as CASE END
+
     assert "END;" in out.replace("\n", "")
     assert "when enabled = 1 then 'on'" not in out.lower()  # ensure uppercase WHEN/THEN formatting
     assert "UPDATE settings" in out
 
-# Additional edge case: embedded JSON with pretty_json=True inside UPDATE
+
 def test_format_all_pretty_json_in_update():
     sql = "UPDATE config SET info = '{\"nested\":{\"a\":10,\"b\":[1,2,3]}}' WHERE id=1;"
     out = SQLFormatter.format_all(sql, pretty_json=True)

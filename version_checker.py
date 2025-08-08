@@ -1,8 +1,8 @@
+from __future__ import annotations
 import os
 import sys
 import subprocess
 import requests
-
 from version import __version__
 
 
@@ -23,7 +23,8 @@ class VersionChecker:
         self.repo = repo
         self.local_version = __version__
 
-    def fetch_latest_version(self) -> str | None:
+    from typing import Optional
+    def fetch_latest_version(self) -> Optional[str]:
         """Return the latest SemVer string from GitHub, or None on failure."""
         url = self.GITHUB_API_LATEST_RELEASE.format(repo=self.repo)
         try:

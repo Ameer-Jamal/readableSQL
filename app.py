@@ -1,6 +1,11 @@
+import logging
+import os
 import subprocess
 import sys
-import logging
+
+from PyQt5.QtCore import QTimer
+
+from version import __version__
 from version_checker import VersionChecker
 
 # --- Configuration ---
@@ -9,7 +14,7 @@ MIN_PYTHON = (3, 7)
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-# --- Version Check ---
+# --- Version Check of Python ---
 if sys.version_info < MIN_PYTHON:
     logging.critical(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or higher is required.")
     sys.exit(1)
@@ -44,10 +49,8 @@ def import_dependencies():
 
 # --- Main ---
 def main():
-    checker = VersionChecker("Ameer-Jamal/readableSQL")
-    checker.check_for_update()
-
     QtWidgets = import_dependencies()
+
     try:
         from gui_app import SQLFormatterApp
     except ImportError as e:
@@ -57,6 +60,11 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     window = SQLFormatterApp()
     window.show()
+
+    # --- Check for updates ---
+    checker = VersionChecker(__version__)
+    checker.prompt_update(parent=window)
+
     sys.exit(app.exec_())
 
 

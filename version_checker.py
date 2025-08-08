@@ -1,67 +1,132 @@
-from __future__ import annotations
-import os
-import sys
+# version_checker.py
+
+import json
+import ssl
+import certifi
+import urllib.request
+import urllib.error
 import subprocess
-import requests
-from version import __version__
+import sys
+import os
+import logging
+from typing import Optional
+from PyQt5.QtWidgets import QMessageBox
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
 class VersionChecker:
     """
-    Checks GitHub for a newer release tag and, if found,
-    pulls the latest code via git and restarts the process.
+    Checks GitHub tags for this repository and, if a newer version is available,
+    offers to pull and restart the application in place.
     """
 
-    GITHUB_API_LATEST_RELEASE = (
-        "https://api.github.com/repos/{repo}/releases/latest"
-    )
+    OWNER = "Ameer-Jamal"
+    REPO = "readableSQL"
+    TAGS_API_URL = "https://api.github.com/repos/{owner}/{repo}/tags"
+    REMOTE = "origin"
+    BRANCH = "master"
 
-    def __init__(self, repo: str):
-        """
-        :param repo: GitHub "owner/repo", e.g. "Ameer-Jamal/readableSQL"
-        """
-        self.repo = repo
-        self.local_version = __version__
+    def __init__(self, current_version: str, repo_path: Optional[str] = None):
+        self.current = current_version
+        # default to the directory containing this file
+        self.repo_path = repo_path or os.path.abspath(os.path.join(__file__, os.pardir))
 
-    from typing import Optional
-    def fetch_latest_version(self) -> Optional[str]:
-        """Return the latest SemVer string from GitHub, or None on failure."""
-        url = self.GITHUB_API_LATEST_RELEASE.format(repo=self.repo)
+    def fetch_latest_tag(self) -> Optional[str]:
+        """
+        Retrieve the list of tags from GitHub and return the highest semver tag,
+        or None if we failed to talk to GitHub.
+        """
+        url = self.TAGS_API_URL.format(owner=self.OWNER, repo=self.REPO)
+        logging.info(f"Fetching tags from {url}…")
+        ctx = ssl.create_default_context(cafile=certifi.where())
+
         try:
-            resp = requests.get(url, headers={"Accept": "application/vnd.github.v3+json"})
-            resp.raise_for_status()
-            tag = resp.json().get("tag_name", "")
-            return tag.lstrip("v")
-        except Exception:
+            with urllib.request.urlopen(url, context=ctx, timeout=5) as resp:
+                raw = resp.read().decode()
+                tags = json.loads(raw)
+        except Exception as e:
+            logging.warning(f"Could not fetch tags: {e}")
             return None
 
-    @staticmethod
-    def version_tuple(v: str) -> tuple[int, ...]:
-        return tuple(int(x) for x in v.split("."))
+        # pull out only tags that start with 'v'
+        versions = [t["name"].lstrip("v") for t in tags if t.get("name", "").startswith("v")]
+        logging.info(f"Found GitHub tags: {versions}")
+        if not versions:
+            return None
 
-    def is_update_available(self, latest: str) -> bool:
-        """Return True if latest > local."""
-        try:
-            return self.version_tuple(latest) > self.version_tuple(self.local_version)
-        except Exception:
+        def semver_key(v: str):
+            parts = v.split(".")
+            return tuple(int(p) for p in parts)
+
+        versions.sort(key=semver_key, reverse=True)
+        latest = versions[0]
+        logging.info(f"Latest semver tag is: {latest}")
+        return latest
+
+    def _compare(self, v1: str, v2: str) -> int:
+        """
+        Compare two dot-separated version strings.
+          return  1 if v1>v2
+                  0 if v1==v2
+                 -1 if v1<v2
+        """
+        a = [int(x) for x in v1.split(".")]
+        b = [int(x) for x in v2.split(".")]
+        # pad them out
+        n = max(len(a), len(b))
+        a += [0] * (n - len(a))
+        b += [0] * (n - len(b))
+        if a > b:
+            return 1
+        if a < b:
+            return -1
+        return 0
+
+    def is_update_available(self) -> bool:
+        """
+        Return True if a newer tag exists on GitHub.
+        """
+        latest = self.fetch_latest_tag()
+        if not latest:
             return False
+        cmp = self._compare(latest, self.current)
+        logging.info(f"Comparing latest `{latest}` vs current `{self.current}`: {cmp}")
+        return cmp > 0
 
-    def perform_update(self) -> None:
+    def prompt_update(self, parent=None):
         """
-        Pull the latest code and restart this process.
-        Raises on failure.
+        If an update is available, show a Qt dialog asking the user to pull and restart.
+        On confirmation, performs 'git pull' and re-executes the process.
         """
-        # 1. Pull
-        subprocess.run(["git", "pull"], check=True)
-        # 2. Restart (replace process image)
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        if not self.is_update_available():
+            return
 
-    def check_for_update(self) -> None:
-        """
-        Fetches remote version, compares, and updates/restarts if needed.
-        Call early in your app startup.
-        """
-        latest = self.fetch_latest_version()
-        if latest and self.is_update_available(latest):
-            print(f"Updating from {self.local_version} to {latest}…")
-            self.perform_update()
+        latest = self.fetch_latest_tag()
+        if latest is None:
+            return
+
+        dlg = QMessageBox(parent)
+        dlg.setWindowTitle("Update Available")
+        dlg.setText(f"A new version {latest} is available (you have {self.current}).")
+        dlg.setInformativeText("Pull & restart now?")
+        dlg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+
+        if dlg.exec() != QMessageBox.Yes:
+            logging.info("User declined update.")
+            return
+
+        try:
+            logging.info(f"Pulling {self.REMOTE}/{self.BRANCH}…")
+            subprocess.check_call(
+                ["git", "pull", self.REMOTE, self.BRANCH],
+                cwd=self.repo_path,
+            )
+            logging.info("Restarting…")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:
+            logging.error(f"Update failed: {e}")
+            err = QMessageBox(parent)
+            err.setWindowTitle("Update Failed")
+            err.setText(f"Auto-update failed:\n{e}")
+            err.exec()

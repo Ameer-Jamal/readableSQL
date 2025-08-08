@@ -68,13 +68,15 @@ class SQLFormatter:
             if not part_content:
                 continue
 
-            upper_part = part_content.upper()
+            cleaned = re.sub(r"^(?:\s*(?:/\*.*?\*/|--[^\n]*))*", "", part_content,
+                             flags=re.DOTALL)
+
+            upper_part = cleaned.upper()
 
             # Dispatch based on the first matching pattern
             handler_name = None
             for pattern, method_name in SQLFormatter._DISPATCH_MAP:
-                # For INSERT_SELECT, search the original text; for others, match against upper_part
-                subject = part_content if pattern is SQLFormatter.INSERT_SELECT_PATTERN else upper_part
+                subject = cleaned if pattern is SQLFormatter.INSERT_SELECT_PATTERN else upper_part
                 if pattern.search(subject):
                     handler_name = method_name
                     break
@@ -106,7 +108,11 @@ class SQLFormatter:
         cols_m = re.search(
             r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE
         )
-        values_block_m = re.search(r"VALUES\s*([\s\S]+?);", sql, re.IGNORECASE)
+        values_block_m = re.search(
+            r"\bVALUES\b\s*([\s\S]+?);",
+            sql,
+            re.IGNORECASE,
+        )
 
         if not table_m or not cols_m or not values_block_m:
             return "❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause."
@@ -116,6 +122,8 @@ class SQLFormatter:
         cols = [c.strip() for c in cols_str.split(",")]
 
         values_content_raw = values_block_m.group(1).strip()
+        values_content_raw = re.sub(r"/\*.*?\*/", "", values_content_raw, flags=re.DOTALL)
+
         individual_row_strings_content = []
 
         temp_delimiter = "<ROW_DELIMITER_TEMP_VALS>"

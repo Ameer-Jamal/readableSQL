@@ -46,22 +46,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
+          # Fetch full history (required for tagging) and keep auth creds
+          fetch-depth: 0
           persist-credentials: true
 
       - name: Bump patch version in version.py
-        shell: bash
         run: |
           set -e
-          # Extract current semver from version.py
           CURRENT=$(grep "^__version__" version.py | cut -d '"' -f2)
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
           NEW_PATCH=$((PATCH + 1))
           NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
           echo "Bumping $CURRENT → $NEW_VERSION"
-          # Overwrite version.py
           sed -i "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" version.py
 
-          # Commit and tag
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add version.py
@@ -70,7 +68,7 @@ jobs:
 
       - name: Push commit and tags
         run: |
-          git push origin HEAD:master --follow-tags
-
-      - name: Push commit and tags
-        run: git push origin HEAD:master --follow-tags
+          # Push the version bump commit
+          git push origin master
+          # Push the new tag(s)
+          git push origin --tags

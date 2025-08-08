@@ -48,7 +48,7 @@ jobs:
           persist-credentials: true       # so the push can authenticate
 
       - name: Bump patch version
-        uses: phips28/gh-action-bump-version@v9
+        uses: phips28/gh-action-bump-version@master
         with:
           file: version.py               # file containing __version__ = "X.Y.Z"
           tag-prefix: "v"                # creates tags like v1.2.3

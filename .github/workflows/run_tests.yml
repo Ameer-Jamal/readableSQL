@@ -1,6 +1,6 @@
 # .github/workflows/run_tests.yml
 
-name: Python Tests
+name: Python Tests & Release
 
 on:
   push:
@@ -12,7 +12,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -34,3 +33,26 @@ jobs:
           run: pytest testing/
         env:
           QT_QPA_PLATFORM: offscreen
+
+  bump-version:
+    needs: test
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/master' &&
+      github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: true       # so the push can authenticate
+
+      - name: Bump patch version
+        uses: phips28/gh-action-bump-version@v9
+        with:
+          file: version.py               # file containing __version__ = "X.Y.Z"
+          tag-prefix: "v"                # creates tags like v1.2.3
+          commit-message: "chore(release): bump version to {{version}}"
+
+      - name: Push commit and tags
+        run: git push origin HEAD:master --follow-tags

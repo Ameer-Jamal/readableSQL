@@ -1,0 +1,6 @@
+# Ignore PyCharm project metadata
+.idea/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import logging
+from version_checker import VersionChecker
 
 # --- Configuration ---
 MIN_PYTHON = (3, 7)
@@ -43,6 +44,9 @@ def import_dependencies():
 
 # --- Main ---
 def main():
+    checker = VersionChecker("Ameer-Jamal/readableSQL")
+    checker.check_for_update()
+
     QtWidgets = import_dependencies()
     try:
         from gui_app import SQLFormatterApp

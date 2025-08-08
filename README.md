@@ -51,7 +51,7 @@ cd readableSQL
 python3 app.py
 ```
 
-> **Note:** `app.py` will auto‐install PyQt5 and QScintilla if they are missing.
+> **Note:** `app.py` will auto‐install requirements.txt if they are missing.
 
 ### 2. Manual Virtual Environment (Optional)
 ```bash
@@ -81,6 +81,7 @@ pytest
 * Python 3.12
 * PyQt5 ≥ 5.15
 * QScintilla ≥ 2.13
+* requests>=2.28
 
 See `requirements.txt` for exact version pins.
 

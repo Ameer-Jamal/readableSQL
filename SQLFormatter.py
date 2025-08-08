@@ -106,13 +106,20 @@ class SQLFormatter:
         """
         table_m = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
         cols_m = re.search(
-            r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES", sql, re.DOTALL | re.IGNORECASE
-        )
-        values_block_m = re.search(
-            r"\bVALUES\b\s*([\s\S]+?);",
+            r"INSERT\s+INTO\s+[^\s(]+\s*\((.*?)\)\s*VALUES",
             sql,
-            re.IGNORECASE,
+            re.DOTALL | re.IGNORECASE
         )
+        if not cols_m:
+            return "❌ Invalid INSERT statement structure (columns not found)."
+
+        values_block_m = re.search(
+            r"\)\s*VALUES\s*([\s\S]+?);",  # note the leading \)
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not values_block_m:
+            return "❌ VALUES clause not found."
 
         if not table_m or not cols_m or not values_block_m:
             return "❌ Invalid INSERT statement structure. Could not identify table, columns, or VALUES clause."

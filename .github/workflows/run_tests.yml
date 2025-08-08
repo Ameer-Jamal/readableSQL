@@ -35,8 +35,9 @@ jobs:
           QT_QPA_PLATFORM: offscreen
 
   bump-version:
-    needs: test
+    name: Bump version & tag
     runs-on: ubuntu-latest
+    needs: test
     if: >
       github.event_name == 'push' &&
       github.ref == 'refs/heads/master' &&
@@ -45,14 +46,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          persist-credentials: true       # so the push can authenticate
+          persist-credentials: true
 
-      - name: Bump patch version
-        uses: phips28/gh-action-bump-version@master
-        with:
-          file: version.py               # file containing __version__ = "X.Y.Z"
-          tag-prefix: "v"                # creates tags like v1.2.3
-          commit-message: "chore(release): bump version to {{version}}"
+      - name: Bump patch version in version.py
+        shell: bash
+        run: |
+          set -e
+          # Extract current semver from version.py
+          CURRENT=$(grep "^__version__" version.py | cut -d '"' -f2)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+          echo "Bumping $CURRENT → $NEW_VERSION"
+          # Overwrite version.py
+          sed -i "s/^__version__ = .*/__version__ = \"$NEW_VERSION\"/" version.py
+
+          # Commit and tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.py
+          git commit -m "chore(release): bump version to $NEW_VERSION"
+          git tag "v$NEW_VERSION"
+
+      - name: Push commit and tags
+        run: |
+          git push origin HEAD:master --follow-tags
 
       - name: Push commit and tags
         run: git push origin HEAD:master --follow-tags

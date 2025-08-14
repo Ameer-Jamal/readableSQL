@@ -1,3 +1,4 @@
 PyQt5>=5.15
 QScintilla>=2.13
 requests>=2.28
+certifi>=2024.2.2

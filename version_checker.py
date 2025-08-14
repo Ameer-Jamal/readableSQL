@@ -2,7 +2,6 @@
 
 import json
 import ssl
-import certifi
 import urllib.request
 import urllib.error
 import subprocess
@@ -29,8 +28,20 @@ class VersionChecker:
 
     def __init__(self, current_version: str, repo_path: Optional[str] = None):
         self.current = current_version
-        # default to the directory containing this file
         self.repo_path = repo_path or os.path.abspath(os.path.join(__file__, os.pardir))
+
+    def _ssl_context(self) -> ssl.SSLContext:
+        """
+        Create an SSL context. Prefer certifi if available; otherwise fall back to system CA.
+        """
+        try:
+            import certifi  # lazy import
+            ctx = ssl.create_default_context(cafile=certifi.where())
+            logging.debug("Using certifi CA bundle.")
+            return ctx
+        except Exception as e:
+            logging.debug(f"certifi not available; falling back to system CA: {e}")
+            return ssl.create_default_context()
 
     def fetch_latest_tag(self) -> Optional[str]:
         """
@@ -39,18 +50,17 @@ class VersionChecker:
         """
         url = self.TAGS_API_URL.format(owner=self.OWNER, repo=self.REPO)
         logging.info(f"Fetching tags from {url}…")
-        ctx = ssl.create_default_context(cafile=certifi.where())
+        ctx = self._ssl_context()
 
         try:
-            with urllib.request.urlopen(url, context=ctx, timeout=5) as resp:
+            with urllib.request.urlopen(url, context=ctx, timeout=8) as resp:
                 raw = resp.read().decode()
                 tags = json.loads(raw)
         except Exception as e:
             logging.warning(f"Could not fetch tags: {e}")
             return None
 
-        # pull out only tags that start with 'v'
-        versions = [t["name"].lstrip("v") for t in tags if t.get("name", "").startswith("v")]
+        versions = [t.get("name", "").lstrip("v") for t in tags if t.get("name", "").startswith("v")]
         logging.info(f"Found GitHub tags: {versions}")
         if not versions:
             return None
@@ -73,7 +83,6 @@ class VersionChecker:
         """
         a = [int(x) for x in v1.split(".")]
         b = [int(x) for x in v2.split(".")]
-        # pad them out
         n = max(len(a), len(b))
         a += [0] * (n - len(a))
         b += [0] * (n - len(b))
@@ -89,10 +98,11 @@ class VersionChecker:
         """
         latest = self.fetch_latest_tag()
         if not latest:
+            logging.info("No tags to compare against.")
             return False
-        cmp = self._compare(latest, self.current)
-        logging.info(f"Comparing latest `{latest}` vs current `{self.current}`: {cmp}")
-        return cmp > 0
+        cmpv = self._compare(latest, self.current)
+        logging.info(f"Comparing latest `{latest}` vs current `{self.current}` ⇒ {cmpv}")
+        return cmpv > 0
 
     def prompt_update(self, parent=None):
         """
@@ -118,10 +128,7 @@ class VersionChecker:
 
         try:
             logging.info(f"Pulling {self.REMOTE}/{self.BRANCH}…")
-            subprocess.check_call(
-                ["git", "pull", self.REMOTE, self.BRANCH],
-                cwd=self.repo_path,
-            )
+            subprocess.check_call(["git", "pull", self.REMOTE, self.BRANCH], cwd=self.repo_path)
             logging.info("Restarting…")
             os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as e:

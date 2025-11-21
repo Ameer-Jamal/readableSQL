@@ -163,18 +163,71 @@ def test_format_sql_from_input(tmp_path, monkeypatch):
     cache_file = tmp_path / "last_input.sql"
     app.cache_file = str(cache_file)
 
+    captured = {}
+
     def fake_format_all(sql_text, pretty_json=True):
+        captured["sql"] = sql_text
         return "FORMATTED:" + sql_text
 
     monkeypatch.setattr(gui_app.SQLFormatter.SQLFormatter, "format_all", fake_format_all)
 
-    app.input_text.setText("SELECT 2;")
+    app.input_text.setText("MacBookPro.hsd1.az.comcast.net: SELECT 2;")
+    app.filter_input.setText(r"^[^:]+:\s*")
     app.json_checkbox.setChecked(False)
 
     app.format_sql_from_input()
 
+    assert captured["sql"] == "SELECT 2;"
     assert app.output_text.text() == "FORMATTED:SELECT 2;"
-    assert cache_file.read_text() == "SELECT 2;"
+    assert cache_file.read_text() == "MacBookPro.hsd1.az.comcast.net: SELECT 2;"
+    assert app.error_label.text() == ""
+
+
+def test_format_sql_from_input_invalid_filter(tmp_path, monkeypatch):
+    app = gui_app.SQLFormatterApp()
+    cache_file = tmp_path / "last_input.sql"
+    app.cache_file = str(cache_file)
+
+    called = {"format": False}
+
+    def fake_format_all(sql_text, pretty_json=True):
+        called["format"] = True
+        return "FORMATTED:" + sql_text
+
+    monkeypatch.setattr(gui_app.SQLFormatter.SQLFormatter, "format_all", fake_format_all)
+
+    app.input_text.setText("SELECT 1;")
+    app.filter_input.setText("[")
+
+    app.format_sql_from_input()
+
+    assert called["format"] is False
+    assert "Invalid filter regex" in app.error_label.text()
+
+
+def test_log_filter_splits_statements(monkeypatch):
+    app = gui_app.SQLFormatterApp()
+
+    calls = []
+
+    def fake_format_all(sql_text, pretty_json=True):
+        calls.append(sql_text.strip())
+        return f"FORMATTED:{len(calls)}"
+
+    monkeypatch.setattr(gui_app.SQLFormatter.SQLFormatter, "format_all", fake_format_all)
+
+    app.filter_input.setText(r"MacBookPro.hsd1.az.comcast.net:")
+    app.input_text.setText(
+        " MacBookPro.hsd1.az.comcast.net: ALTER TABLE foo ADD bar INT\n"
+        " MacBookPro.hsd1.az.comcast.net: CREATE TABLE foo(id INT);"
+    )
+
+    app.format_sql_from_input()
+
+    assert len(calls) == 2
+    assert calls[0].startswith("ALTER TABLE")
+    assert calls[1].startswith("CREATE TABLE")
+    assert app.output_text.text() == "FORMATTED:1\n\nFORMATTED:2"
 
 
 from PyQt5.Qsci import QsciScintilla
@@ -198,6 +251,17 @@ def test_toggle_theme_changes_editor_background():
 
     # Final check that the values differ
     assert dark_bg != light_bg, f"Expected dark and light backgrounds to differ, got {dark_bg} both times"
+
+
+def test_wrap_checkbox_controls_editors():
+    app = gui_app.SQLFormatterApp()
+    assert app.input_text.wrapMode() == gui_app.QsciScintilla.WrapNone
+    assert app.output_text.wrapMode() == gui_app.QsciScintilla.WrapNone
+
+    app.wrap_checkbox.setChecked(True)
+    app.toggle_wrap_mode()
+    assert app.input_text.wrapMode() == gui_app.QsciScintilla.WrapWord
+    assert app.output_text.wrapMode() == gui_app.QsciScintilla.WrapWord
 
 
 def test_load_cached_input(tmp_path):

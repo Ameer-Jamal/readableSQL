@@ -16,6 +16,7 @@ class SQLFormatter:
     INSERT_INTO_PATTERN = re.compile(r"^INSERT\s+INTO", re.IGNORECASE)
     SET_PATTERN = re.compile(r"^SET\s+[@\w]+\s*[:=]", re.IGNORECASE)
     CREATE_TABLE_PATTERN = re.compile(r"^CREATE TABLE", re.IGNORECASE)
+    CREATE_INDEX_PATTERN = re.compile(r"^CREATE\s+(?:UNIQUE\s+)?INDEX", re.IGNORECASE)
     ALTER_TABLE_PATTERN = re.compile(r"^ALTER TABLE", re.IGNORECASE)
     UPDATE_PATTERN = re.compile(r"^UPDATE", re.IGNORECASE)
     DELETE_FROM_PATTERN = re.compile(r"^DELETE FROM", re.IGNORECASE)
@@ -31,6 +32,7 @@ class SQLFormatter:
         (INSERT_INTO_PATTERN, "format_insert_values_block"),
         (SET_PATTERN, "format_set_block"),
         (CREATE_TABLE_PATTERN, "format_create_table"),
+        (CREATE_INDEX_PATTERN, "format_create_index"),
         (ALTER_TABLE_PATTERN, "format_alter_table"),
         (UPDATE_PATTERN, "format_update_block"),
         (DELETE_FROM_PATTERN, "format_delete_block"),
@@ -299,7 +301,7 @@ class SQLFormatter:
         if not m:
             return sql.strip()
 
-        header = m.group(1).strip()
+        header = SQLFormatter._collapse_whitespace(m.group(1))
         body = m.group(2).strip()
         cols = [c.strip() for c in re.split(r",(?![^(]*\))", body)]
         if len(cols) == 1:
@@ -314,33 +316,155 @@ class SQLFormatter:
         return "\n".join(out)
 
     @staticmethod
+    def format_create_index(sql: str) -> str:
+        """
+        Format a CREATE [UNIQUE] INDEX statement, expanding column lists vertically.
+        """
+        stripped = SQLFormatter._trim_semicolon(sql)
+        prefix_match = re.match(
+            r"(CREATE\s+(?:UNIQUE\s+)?INDEX\s+[^\s(]+?\s+ON\s+[^\s(]+)",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        if not prefix_match:
+            return sql.strip()
+
+        prefix = SQLFormatter._collapse_whitespace(prefix_match.group(1))
+        remainder = stripped[prefix_match.end():]
+        remainder_lstrip = remainder.lstrip()
+        leading_ws = len(remainder) - len(remainder_lstrip)
+        if not remainder_lstrip.startswith("("):
+            return sql.strip()
+
+        open_idx = prefix_match.end() + leading_ws
+        depth = 0
+        close_idx = -1
+        for idx in range(open_idx, len(stripped)):
+            char = stripped[idx]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    close_idx = idx
+                    break
+        if close_idx == -1:
+            return sql.strip()
+
+        columns_block = stripped[open_idx + 1:close_idx]
+        suffix = stripped[close_idx + 1:].strip()
+
+        columns = SQLFormatter._split_top_level_commas(columns_block)
+        indent = SQLFormatter.INDENT_1
+        lines = [f"{prefix} ("]
+        for idx, col in enumerate(columns):
+            col = SQLFormatter._collapse_whitespace(col)
+            comma = "," if idx < len(columns) - 1 else ""
+            lines.append(f"{indent}{col}{comma}")
+
+        closing = ")"
+        if suffix:
+            closing += f" {suffix}"
+        closing += ";"
+        lines.append(closing)
+        return "\n".join(lines)
+
+    @staticmethod
     def format_alter_table(sql: str) -> str:
         """
-        Format an ALTER TABLE statement. If only one action is present, collapse to a single line.
-        If multiple comma-separated actions exist, place each action on its own line.
-
-        :param sql: The ALTER TABLE statement (optionally ending with semicolon).
-        :return: A formatted ALTER TABLE statement.
+        Format an ALTER TABLE statement. Multi-action statements are expanded so each action
+        appears on its own line; actions that add column groups (ADD (...)) are further expanded
+        so each column definition appears on its own line.
         """
         stripped = SQLFormatter._trim_semicolon(sql)
         m = re.match(r"(ALTER\s+TABLE\s+[^\s]+)\s+(.*)", stripped, flags=re.IGNORECASE | re.DOTALL)
         if not m:
             return sql.strip()
 
-        header = m.group(1).strip()
+        header = SQLFormatter._collapse_whitespace(m.group(1))
         rest = m.group(2).strip()
-        actions = [a.strip() for a in re.split(r",(?![^(]*\))", rest)]
-        if len(actions) == 1:
-            single_line = SQLFormatter._collapse_whitespace(stripped)
-            return f"{single_line} ;"
+        actions = SQLFormatter._split_top_level_commas(rest)
 
-        indent = SQLFormatter.INDENT_1
         out = [header]
-        for i, act in enumerate(actions):
-            comma = "," if i < len(actions) - 1 else ""
-            out.append(f"{indent}{act}{comma}")
-        out.append(";")
+        for idx, action in enumerate(actions):
+            is_last = idx == len(actions) - 1
+            out.extend(SQLFormatter._format_alter_action(action, is_last))
+        if out:
+            out[-1] = out[-1] + ";"
         return "\n".join(out)
+
+    @staticmethod
+    def _extract_alter_group(action: str):
+        start = action.find("(")
+        if start == -1:
+            return None
+        depth = 0
+        for idx in range(start, len(action)):
+            char = action[idx]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    prefix = action[:start]
+                    body = action[start + 1 : idx]
+                    suffix = action[idx + 1 :]
+                    return prefix, body, suffix
+        return None
+
+    @staticmethod
+    def _split_top_level_commas(text: str):
+        parts = []
+        current = []
+        depth = 0
+        for char in text:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(0, depth - 1)
+
+            if char == "," and depth == 0:
+                piece = "".join(current).strip()
+                if piece:
+                    parts.append(piece)
+                current = []
+                continue
+
+            current.append(char)
+
+        tail = "".join(current).strip()
+        if tail:
+            parts.append(tail)
+        return parts
+
+    @staticmethod
+    def _format_alter_action(action: str, is_last: bool):
+        indent = SQLFormatter.INDENT_1
+        action = SQLFormatter._collapse_whitespace(action.strip().rstrip(","))
+        comma = "" if is_last else ","
+
+        group_info = SQLFormatter._extract_alter_group(action)
+        if group_info:
+            prefix, body, suffix = group_info
+            items = SQLFormatter._split_top_level_commas(body)
+            if len(items) > 1:
+                lines = []
+                prefix_text = prefix.strip()
+                header = f"{indent}{prefix_text} (" if prefix_text else f"{indent}("
+                lines.append(header)
+                inner_indent = indent + SQLFormatter.INDENT_1
+                for idx, item in enumerate(items):
+                    inner_comma = "," if idx < len(items) - 1 else ""
+                    lines.append(f"{inner_indent}{item}{inner_comma}")
+                closing = f"{indent})"
+                suffix_text = suffix.strip()
+                if suffix_text:
+                    closing += f" {suffix_text}"
+                closing += comma
+                lines.append(closing)
+                return lines
+
+        return [f"{indent}{action}{comma}"]
 
     @staticmethod
     def format_update_block(sql: str) -> str:
@@ -461,13 +585,15 @@ class SQLFormatter:
                 escape = False
             return -1
 
-        pattern = re.compile(r"(=)\s*'({)", re.IGNORECASE)
+        pattern = re.compile(r"(=)\s*('?)\s*(\{)", re.IGNORECASE)
         offset = 0
         while True:
             match = pattern.search(stmt, offset)
             if not match:
                 break
-            start_json = match.start(2)
+            has_quote = bool(match.group(2))
+            start_json = match.start(3)
+            start_replace = start_json if not has_quote else match.start(2)
             end_json = find_balanced_json(stmt, start_json)
             if end_json == -1:
                 break
@@ -476,8 +602,13 @@ class SQLFormatter:
             try:
                 parsed = json.loads(json_str)
                 pretty = json.dumps(parsed, indent=4)
-                stmt = stmt[:start_json] + pretty + stmt[end_json + 1 :]
-                offset = start_json + len(pretty)
+                replacement = pretty
+                end_index = end_json + 1
+                if has_quote and end_index < len(stmt) and stmt[end_index] == "'":
+                    end_index += 1
+                    replacement = "'" + pretty + "'"
+                stmt = stmt[:start_replace] + replacement + stmt[end_index:]
+                offset = start_replace + len(replacement)
             except json.JSONDecodeError:
                 offset = end_json + 1
         return stmt
@@ -590,8 +721,11 @@ class SQLFormatter:
         parts = []
         current_chars = []
         in_single_quotes = False
+        in_double_quotes = False
         escape_next_char = False
         parentheses_level = 0
+        brace_level = 0
+        bracket_level = 0
 
         for char in s:
             if escape_next_char:
@@ -602,17 +736,36 @@ class SQLFormatter:
                 current_chars.append(char)
                 escape_next_char = True
                 continue
-            if char == "'":
+            if char == "'" and not in_double_quotes:
                 in_single_quotes = not in_single_quotes
                 current_chars.append(char)
                 continue
-            if not in_single_quotes:
+            if char == '"' and not in_single_quotes:
+                in_double_quotes = not in_double_quotes
+                current_chars.append(char)
+                continue
+            if not in_single_quotes and not in_double_quotes:
                 if char == "(":
                     parentheses_level += 1
                 elif char == ")":
                     if parentheses_level > 0:
                         parentheses_level -= 1
-                if char == "," and parentheses_level == 0:
+                elif char == "{":
+                    brace_level += 1
+                elif char == "}":
+                    if brace_level > 0:
+                        brace_level -= 1
+                elif char == "[":
+                    bracket_level += 1
+                elif char == "]":
+                    if bracket_level > 0:
+                        bracket_level -= 1
+                if (
+                    char == ","
+                    and parentheses_level == 0
+                    and brace_level == 0
+                    and bracket_level == 0
+                ):
                     parts.append("".join(current_chars).strip())
                     current_chars = []
                     continue

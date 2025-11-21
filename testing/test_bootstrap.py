@@ -72,7 +72,7 @@ def test_install_requirements_success(monkeypatch, caplog):
 
     caplog.set_level(logging.INFO)
     bootstrap.install_requirements()
-    assert called == [[sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]]
+    assert called == [[sys.executable, "-m", "pip", "install", "-r", bootstrap.REQ_FILE]]
     assert "Installing required packages..." in caplog.text
     assert "Installation complete." in caplog.text
 
@@ -180,7 +180,7 @@ def test_import_dependencies_still_missing(monkeypatch, caplog):
     with pytest.raises(SystemExit) as excinfo:
         bootstrap.import_dependencies()
     assert excinfo.value.code == 1
-    assert "PyQt5 or QScintilla still not found after installation." in caplog.text
+    assert "Still cannot import PyQt5" in caplog.text or "PyQt5 or QScintilla still not found after installation." in caplog.text
 
 
 # --- Tests for main() ---

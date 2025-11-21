@@ -4,10 +4,11 @@ from PyQt5.QtGui import QFont, QColor, QPalette
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSizePolicy,
-    QSplitter, QCheckBox, QDesktopWidget
+    QSplitter, QCheckBox, QDesktopWidget, QLineEdit
 )
 
 import SQLFormatter
+import re
 
 # Named constants for fonts and colors
 FONT_MONO = QFont("Courier New", 14)
@@ -224,7 +225,26 @@ class SQLFormatterApp(QWidget):
         self.dark_mode_checkbox.setChecked(self.settings.value("darkMode", False, type=bool))
         self.dark_mode_checkbox.stateChanged.connect(self.toggle_theme)
         top_controls_layout.addWidget(self.dark_mode_checkbox)
+
+        self.wrap_checkbox = QCheckBox("Wrap Lines")
+        self.wrap_checkbox.setFont(self.mono)
+        self.wrap_checkbox.setChecked(self.settings.value("wrapLines", False, type=bool))
+        self.wrap_checkbox.stateChanged.connect(self.toggle_wrap_mode)
+        top_controls_layout.addWidget(self.wrap_checkbox)
         layout.addLayout(top_controls_layout)
+
+        filter_layout = QHBoxLayout()
+        filter_label = QLabel("Filter (Supports Regex):")
+        filter_label.setFont(self.mono)
+        self.filter_input = QLineEdit()
+        self.filter_input.setFont(self.mono)
+        self.filter_input.setPlaceholderText("Optional regex to strip before formatting")
+        saved_filter = self.settings.value("filterPattern", "", type=str) or ""
+        self.filter_input.setText(saved_filter)
+        self.filter_input.textChanged.connect(self.save_filter_pattern)
+        filter_layout.addWidget(filter_label)
+        filter_layout.addWidget(self.filter_input)
+        layout.addLayout(filter_layout)
 
         self.input_text, self.input_lexer = self._create_scintilla_editor(
             with_lexer=True,
@@ -275,6 +295,7 @@ class SQLFormatterApp(QWidget):
 
         self.setLayout(layout)
         self.toggle_theme()
+        self.toggle_wrap_mode(apply_only=True)
 
     def _load_cached_input(self):
         try:
@@ -325,9 +346,75 @@ class SQLFormatterApp(QWidget):
                     token_color_map=LIGHT_LEXER_COLORS,
                 )
             editor.recolor()
+        self.toggle_wrap_mode(apply_only=True)
 
     def save_checkbox_states(self):
         self.settings.setValue("prettyJson", self.json_checkbox.isChecked())
+
+    def save_filter_pattern(self, text: str):
+        self.settings.setValue("filterPattern", text)
+
+    def _apply_filter(self, sql: str):
+        """
+        Apply the configured regex filter line-by-line so we can detect statement
+        boundaries wherever the prefix appears.
+        Returns the filtered text and a list of booleans indicating which lines matched.
+        """
+        pattern = (self.filter_input.text() or "").strip()
+        if not pattern:
+            return sql, None
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"Invalid filter regex: {exc}") from exc
+
+        filtered_lines = []
+        match_flags = []
+        any_match = False
+        for line in sql.splitlines():
+            new_line, count = compiled.subn("", line)
+            if count:
+                new_line = new_line.lstrip()
+                any_match = True
+            filtered_lines.append(new_line)
+            match_flags.append(count > 0)
+
+        return "\n".join(filtered_lines), (match_flags if any_match else None)
+
+    def _format_with_optional_chunks(self, sql_text: str, filter_flags, pretty: bool) -> str:
+        """
+        When filter_flags is provided, treat each line that matched the filter as the
+        start of a new statement so log files with prefixed SQL still format correctly.
+        """
+        if not filter_flags:
+            return SQLFormatter.SQLFormatter.format_all(sql_text, pretty_json=pretty)
+
+        filtered_lines = sql_text.splitlines()
+        if len(filtered_lines) != len(filter_flags):
+            return SQLFormatter.SQLFormatter.format_all(sql_text, pretty_json=pretty)
+
+        statements = []
+        current_lines = []
+        for line, is_new_statement in zip(filtered_lines, filter_flags):
+            if is_new_statement and current_lines:
+                chunk = "\n".join(current_lines).strip()
+                if chunk:
+                    statements.append(chunk)
+                current_lines = []
+            current_lines.append(line)
+
+        if current_lines:
+            chunk = "\n".join(current_lines).strip()
+            if chunk:
+                statements.append(chunk)
+
+        if not statements:
+            return SQLFormatter.SQLFormatter.format_all(sql_text, pretty_json=pretty)
+
+        formatted_chunks = []
+        for stmt in statements:
+            formatted_chunks.append(SQLFormatter.SQLFormatter.format_all(stmt, pretty_json=pretty))
+        return "\n\n".join(formatted_chunks)
 
     def format_sql_from_input(self):
         sql = self.input_text.text()
@@ -335,9 +422,20 @@ class SQLFormatterApp(QWidget):
             with open(self.cache_file, "w", encoding="utf-8") as f:
                 f.write(sql)
 
+        try:
+            sql_to_format, filter_flags = self._apply_filter(sql)
+        except ValueError as filter_error:
+            self.error_label.setText(str(filter_error))
+            self.error_label.setVisible(True)
+            return
+
         pretty = self.json_checkbox.isChecked()
         try:
-            formatted_output = SQLFormatter.SQLFormatter.format_all(sql, pretty_json=pretty)
+            formatted_output = self._format_with_optional_chunks(
+                sql_to_format,
+                filter_flags,
+                pretty,
+            )
         except Exception as e:
             formatted_output = f"❌ Critical error during formatting: {str(e)}\n\nPlease check the input SQL or report this bug."
             import traceback
@@ -345,6 +443,7 @@ class SQLFormatterApp(QWidget):
 
         self.output_text.setText(formatted_output)
         self.error_label.setText("")
+        self.error_label.setVisible(False)
 
     def eventFilter(self, obj, event):
         if event.type() == event.KeyPress and event.key() == Qt.Key_Return:
@@ -362,3 +461,13 @@ class SQLFormatterApp(QWidget):
 
     def show_user_error(self, message):
         print(f"USER_ERROR: {message}")
+
+    def toggle_wrap_mode(self, apply_only=False):
+        if not apply_only:
+            self.settings.setValue("wrapLines", self.wrap_checkbox.isChecked())
+        wrap_mode = QsciScintilla.WrapWord if self.wrap_checkbox.isChecked() else QsciScintilla.WrapNone
+        wrap_flag = QsciScintilla.WrapFlagByText if self.wrap_checkbox.isChecked() else QsciScintilla.WrapFlagNone
+        for editor in (self.input_text, self.output_text):
+            if editor:
+                editor.setWrapMode(wrap_mode)
+                editor.setWrapVisualFlags(wrap_flag)

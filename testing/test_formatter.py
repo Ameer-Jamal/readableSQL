@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from SQLFormatter import SQLFormatter
 import pytest
 
@@ -94,11 +99,58 @@ def test_format_create_table_basic():
     assert "b varchar(10)" in out
 
 
+def test_format_create_index_single_column():
+    sql = "CREATE INDEX idx_name ON foo.bar (col);"
+    out = SQLFormatter.format_create_index(sql)
+    expected = (
+        "CREATE INDEX idx_name ON foo.bar (\n"
+        "    col\n"
+        ");"
+    )
+    assert out == expected
+
+
+def test_format_create_index_multiple_columns():
+    sql = "CREATE UNIQUE INDEX idx ON schema.tbl (col1, col2 DESC, FUNC(col3, 1));"
+    out = SQLFormatter.format_create_index(sql)
+    expected = (
+        "CREATE UNIQUE INDEX idx ON schema.tbl (\n"
+        "    col1,\n"
+        "    col2 DESC,\n"
+        "    FUNC(col3, 1)\n"
+        ");"
+    )
+    assert out == expected
+
+
 def test_format_alter_table():
     sql = "ALTER TABLE   foo  ADD COLUMN   bar int  ;"
     out = SQLFormatter.format_alter_table(sql)
-    # whitespace collapsed
-    assert out == "ALTER TABLE foo ADD COLUMN bar int ;"
+    lines = out.splitlines()
+    assert lines[0] == "ALTER TABLE foo"
+    assert lines[1].strip() == "ADD COLUMN bar int;"
+
+
+def test_format_alter_table_single_action_multiline():
+    sql = "ALTER TABLE foo ADD COLUMN bar int;"
+    out = SQLFormatter.format_alter_table(sql)
+    lines = out.splitlines()
+    assert lines[0] == "ALTER TABLE foo"
+    assert lines[1].strip() == "ADD COLUMN bar int;"
+
+
+def test_format_alter_table_multi_column_add():
+    sql = "ALTER TABLE foo ADD (bar int, baz varchar(10), qux boolean default false);"
+    out = SQLFormatter.format_alter_table(sql)
+    expected = (
+        "ALTER TABLE foo\n"
+        "    ADD (\n"
+        "        bar int,\n"
+        "        baz varchar(10),\n"
+        "        qux boolean default false\n"
+        "    );"
+    )
+    assert out == expected
 
 
 def test_format_all_mixed():
@@ -112,7 +164,8 @@ def test_format_all_mixed():
     assert "INSERT INTO foo" in out
     assert "SET @X" in out
     assert "UPDATE foo" in out
-    assert "ALTER TABLE foo ADD col int" in out
+    assert "ALTER TABLE foo" in out
+    assert "ADD col int;" in out
 
 
 def test_insert_with_nested_functions():
@@ -135,6 +188,22 @@ def test_insert_with_comma_in_string():
     sql = "INSERT INTO foo(name, note) VALUES('Doe, John', 'Checked');"
     out = SQLFormatter.format_insert_values_block(sql)
     assert "'Doe, John'" in out
+
+
+def test_smart_split_csv_handles_double_quotes():
+    text = 'print "Hello, world", next_val, func("NEW_DOCUMENT", thisUser)'
+    parts = SQLFormatter.smart_split_csv(text)
+    assert parts == [
+        'print "Hello, world"',
+        "next_val",
+        'func("NEW_DOCUMENT", thisUser)',
+    ]
+
+
+def test_smart_split_csv_handles_json():
+    text = '{"name":"x","vals":[1,2]}, final'
+    parts = SQLFormatter.smart_split_csv(text)
+    assert parts == ['{"name":"x","vals":[1,2]}', "final"]
 
 
 def test_insert_with_quoted_identifiers():
@@ -181,6 +250,13 @@ def test_embedded_json_toggle():
     out_raw = SQLFormatter.format_all(sql, pretty_json=False)
     assert '\n    "a": 1,' in out_pretty
     assert '{"a":1,"b":[2,3]}' in out_raw
+
+
+def test_embedded_json_without_quotes():
+    sql = """UPDATE config SET data = {"a":1,"b":[2,3]} WHERE id = 5;"""
+    out_pretty = SQLFormatter.format_all(sql, pretty_json=True)
+    assert '\n    "a": 1,' in out_pretty
+    assert "WHERE id = 5;" in out_pretty
 
 
 def test_insert_select_with_reserved_word():
@@ -312,9 +388,7 @@ def test_format_alter_table_multiple_actions():
     # Next lines should be indented and end with commas except the last
     assert lines[1].strip() == "ADD COLUMN x INT,"
     assert lines[2].strip() == "DROP COLUMN y,"
-    assert lines[3].strip() == "RENAME TO foo2"
-    # Final line is just a semicolon
-    assert lines[4] == ";"
+    assert lines[3].strip() == "RENAME TO foo2;"
 
 
 def test_format_update_block_multiple_assignments():

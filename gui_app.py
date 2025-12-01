@@ -1,3 +1,5 @@
+import os
+
 from PyQt5.Qsci import QsciScintilla, QsciLexerSQL
 from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtGui import QFont, QColor, QPalette
@@ -133,7 +135,7 @@ class SQLFormatterApp(QWidget):
         self.cache_file = "last_input.sql"
         self.input_lexer = None
         self.output_lexer = None
-        self.settings = QSettings("AmeerJ", "SQLFormatterApp")
+        self.settings = self._create_settings()
 
         self._setup_ui()
         self._load_cached_input()
@@ -296,6 +298,14 @@ class SQLFormatterApp(QWidget):
         self.setLayout(layout)
         self.toggle_theme()
         self.toggle_wrap_mode(apply_only=True)
+
+    def _create_settings(self) -> QSettings:
+        running_tests = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+        app_name = "SQLFormatterAppTest" if running_tests else "SQLFormatterApp"
+        settings = QSettings("AmeerJ", app_name)
+        if running_tests:
+            settings.clear()
+        return settings
 
     def _load_cached_input(self):
         try:

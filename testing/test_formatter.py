@@ -123,6 +123,32 @@ def test_format_create_index_multiple_columns():
     assert out == expected
 
 
+def test_format_create_view_with_union():
+    sql = (
+        "CREATE OR REPLACE VIEW schema.my_view AS "
+        "SELECT a, b AS col_b FROM tbl1 LEFT JOIN tbl2 ON tbl1.id = tbl2.id WHERE a > 0 "
+        "UNION SELECT c, d FROM tbl3;"
+    )
+    out = SQLFormatter.format_all(sql)
+    expected = (
+        "CREATE OR REPLACE VIEW schema.my_view AS\n"
+        "SELECT\n"
+        "    a,\n"
+        "    b AS col_b\n"
+        "FROM tbl1\n"
+        "    LEFT JOIN tbl2\n"
+        "    ON tbl1.id = tbl2.id\n"
+        "    WHERE a > 0\n"
+        "UNION\n"
+        "\n"
+        "SELECT\n"
+        "    c,\n"
+        "    d\n"
+        "FROM tbl3;"
+    )
+    assert out.strip() == expected.strip()
+
+
 def test_format_alter_table():
     sql = "ALTER TABLE   foo  ADD COLUMN   bar int  ;"
     out = SQLFormatter.format_alter_table(sql)

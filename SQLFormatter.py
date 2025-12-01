@@ -1,6 +1,6 @@
 import json
 import re
-from typing import List
+from typing import List, Optional, Tuple
 
 
 class SQLFormatter:
@@ -17,6 +17,7 @@ class SQLFormatter:
     SET_PATTERN = re.compile(r"^SET\s+[@\w]+\s*[:=]", re.IGNORECASE)
     CREATE_TABLE_PATTERN = re.compile(r"^CREATE TABLE", re.IGNORECASE)
     CREATE_INDEX_PATTERN = re.compile(r"^CREATE\s+(?:UNIQUE\s+)?INDEX", re.IGNORECASE)
+    CREATE_VIEW_PATTERN = re.compile(r"^CREATE\s+(?:OR\s+REPLACE\s+)?VIEW", re.IGNORECASE)
     ALTER_TABLE_PATTERN = re.compile(r"^ALTER TABLE", re.IGNORECASE)
     UPDATE_PATTERN = re.compile(r"^UPDATE", re.IGNORECASE)
     DELETE_FROM_PATTERN = re.compile(r"^DELETE FROM", re.IGNORECASE)
@@ -33,6 +34,7 @@ class SQLFormatter:
         (SET_PATTERN, "format_set_block"),
         (CREATE_TABLE_PATTERN, "format_create_table"),
         (CREATE_INDEX_PATTERN, "format_create_index"),
+        (CREATE_VIEW_PATTERN, "format_create_view"),
         (ALTER_TABLE_PATTERN, "format_alter_table"),
         (UPDATE_PATTERN, "format_update_block"),
         (DELETE_FROM_PATTERN, "format_delete_block"),
@@ -368,6 +370,237 @@ class SQLFormatter:
         closing += ";"
         lines.append(closing)
         return "\n".join(lines)
+
+    @staticmethod
+    def format_create_view(sql: str) -> str:
+        """
+        Format CREATE [OR REPLACE] VIEW statements so that SELECT lists and clauses
+        are expanded across multiple lines for readability.
+        """
+        stripped = SQLFormatter._trim_semicolon(sql)
+        match = re.match(
+            r"(CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+.+?)\s+AS\s+(SELECT.*)",
+            stripped,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return sql.strip()
+
+        header = SQLFormatter._collapse_whitespace(match.group(1))
+        body = match.group(2).strip()
+        segments = SQLFormatter._split_view_select_segments(body)
+        if not segments:
+            return sql.strip()
+
+        lines: List[str] = [f"{header} AS"]
+        for idx, (segment_sql, union_token) in enumerate(segments):
+            if idx > 0 and lines and lines[-1] != "":
+                lines.append("")
+            lines.extend(SQLFormatter._format_view_select_segment(segment_sql))
+            if union_token:
+                lines.append(union_token.upper())
+
+        result = "\n".join(line.rstrip() for line in lines if line is not None)
+        result = result.strip()
+        if not result.endswith(";"):
+            result = result + ";"
+        return result
+
+    @staticmethod
+    def _split_view_select_segments(body: str) -> List[Tuple[str, Optional[str]]]:
+        segments: List[Tuple[str, Optional[str]]] = []
+        if not body:
+            return segments
+
+        depth = 0
+        in_single = False
+        in_double = False
+        start = 0
+        i = 0
+        upper = body.upper()
+        length = len(body)
+
+        while i < length:
+            char = body[i]
+            if not in_single and not in_double and depth == 0 and upper.startswith("UNION", i):
+                prev_char = body[i - 1] if i > 0 else " "
+                if not (prev_char.isalnum() or prev_char == "_"):
+                    token = "UNION"
+                    token_len = len(token)
+                    upper_slice = upper[i:]
+                    if upper_slice.startswith("UNION ALL"):
+                        token = "UNION ALL"
+                        token_len = len(token)
+                    elif upper_slice.startswith("UNION DISTINCT"):
+                        token = "UNION DISTINCT"
+                        token_len = len(token)
+
+                    chunk = body[start:i].strip()
+                    if chunk:
+                        segments.append((chunk, token))
+                    i += token_len
+                    while i < length and body[i].isspace():
+                        i += 1
+                    start = i
+                    continue
+
+            if char == "'" and not in_double:
+                in_single = not in_single
+            elif char == '"' and not in_single:
+                in_double = not in_double
+            elif not in_single and not in_double:
+                if char == "(":
+                    depth += 1
+                elif char == ")" and depth > 0:
+                    depth -= 1
+            i += 1
+
+        tail = body[start:].strip()
+        if tail:
+            segments.append((tail, None))
+        return segments
+
+    @staticmethod
+    def _format_view_select_segment(segment: str) -> List[str]:
+        chunk = segment.strip()
+        if not chunk:
+            return []
+
+        upper = chunk.upper()
+        if not upper.startswith("SELECT"):
+            return [SQLFormatter._collapse_whitespace(chunk)]
+
+        from_idx = SQLFormatter._find_keyword_outside_parentheses(chunk, "FROM")
+        if from_idx == -1:
+            return [SQLFormatter._collapse_whitespace(chunk)]
+
+        select_part = chunk[:from_idx]
+        rest = chunk[from_idx:]
+        prefix, columns_section = SQLFormatter._extract_select_columns_section(select_part)
+        lines = [prefix]
+        columns = SQLFormatter.smart_split_csv(columns_section)
+        indent = SQLFormatter.INDENT_1
+        if columns:
+            for idx, col in enumerate(columns):
+                comma = "," if idx < len(columns) - 1 else ""
+                lines.append(f"{indent}{col.strip()}{comma}")
+        elif columns_section:
+            lines[-1] = f"{prefix} {columns_section.strip()}"
+
+        rest_lines = SQLFormatter._format_select_rest(rest)
+        lines.extend(rest_lines)
+        return lines
+
+    @staticmethod
+    def _extract_select_columns_section(select_part: str) -> Tuple[str, str]:
+        text = select_part.strip()
+        if not text.upper().startswith("SELECT"):
+            return text, ""
+
+        remainder = text[len("SELECT"):].lstrip()
+        modifiers = []
+        while True:
+            upper = remainder.upper()
+            if upper.startswith("DISTINCT "):
+                modifiers.append("DISTINCT")
+                remainder = remainder[len("DISTINCT"):].lstrip()
+            elif upper.startswith("ALL "):
+                modifiers.append("ALL")
+                remainder = remainder[len("ALL"):].lstrip()
+            else:
+                break
+
+        prefix = "SELECT"
+        if modifiers:
+            prefix += " " + " ".join(modifiers)
+        return prefix, remainder
+
+    @staticmethod
+    def _find_keyword_outside_parentheses(sql: str, keyword: str) -> int:
+        keyword_upper = keyword.upper()
+        upper_sql = sql.upper()
+        length = len(sql)
+        kw_len = len(keyword)
+        in_single = False
+        in_double = False
+        depth = 0
+        i = 0
+
+        while i <= length - kw_len:
+            if not in_single and not in_double and depth == 0:
+                if upper_sql.startswith(keyword_upper, i):
+                    before = sql[i - 1] if i > 0 else ""
+                    after = sql[i + kw_len] if i + kw_len < length else ""
+                    if (not before or not (before.isalnum() or before == "_")) and (
+                        not after or not (after.isalnum() or after == "_")
+                    ):
+                        return i
+            char = sql[i]
+            if char == "'" and not in_double:
+                in_single = not in_single
+                i += 1
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                i += 1
+                continue
+            if not in_single and not in_double:
+                if char == "(":
+                    depth += 1
+                elif char == ")" and depth > 0:
+                    depth -= 1
+            i += 1
+        return -1
+
+    @staticmethod
+    def _format_select_rest(rest: str) -> List[str]:
+        text = rest.strip()
+        if not text:
+            return []
+
+        keywords = [
+            "LEFT OUTER JOIN",
+            "RIGHT OUTER JOIN",
+            "FULL OUTER JOIN",
+            "LEFT JOIN",
+            "RIGHT JOIN",
+            "FULL JOIN",
+            "INNER JOIN",
+            "CROSS JOIN",
+            "OUTER APPLY",
+            "CROSS APPLY",
+            "WHERE",
+            "GROUP BY",
+            "HAVING",
+            "ORDER BY",
+            "FROM",
+            "ON",
+        ]
+
+        for keyword in sorted(keywords, key=len, reverse=True):
+            pattern = re.compile(r"\s+(" + re.escape(keyword) + r")\b", re.IGNORECASE)
+            text = pattern.sub(lambda m: "\n" + m.group(1), text)
+
+        join_pattern = re.compile(r"\s+(JOIN)\b", re.IGNORECASE)
+
+        def join_replacer(match: re.Match) -> str:
+            before = match.string[: match.start(1)].rstrip().upper()
+            for prefix in ("LEFT", "RIGHT", "FULL", "INNER", "CROSS", "OUTER", "NATURAL"):
+                if before.endswith(prefix):
+                    return match.group(0)
+            return "\n" + match.group(1)
+
+        text = join_pattern.sub(join_replacer, text)
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return []
+
+        formatted = [lines[0]]
+        indent = SQLFormatter.INDENT_1
+        for line in lines[1:]:
+            formatted.append(f"{indent}{line}")
+        return formatted
 
     @staticmethod
     def format_alter_table(sql: str) -> str:
